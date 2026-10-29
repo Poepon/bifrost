@@ -1,4 +1,6 @@
 import { isRegexEntry, regexEntryPattern } from "@/components/modelAccess/utils";
+import type { MCPClient } from "@/lib/types/mcp";
+import type { MCPExposeItem } from "./mcpExposeList";
 
 const sameKey = (a: string, b: string) => a.toLowerCase() === b.toLowerCase();
 
@@ -38,4 +40,46 @@ export function nextExposeList(value: string[] | null | undefined, discovered: s
 	const isExactlyDiscovered =
 		next.length === allKeys.length && !next.some(isRegexEntry) && allKeys.every((k) => next.some((entry) => sameKey(entry, k)));
 	return isExactlyDiscovered ? ["*"] : next;
+}
+
+// exposeRowLabel is a row's state as text, where the list is shown without its switches.
+export function exposeRowLabel(value: string[] | null | undefined, key: string): string {
+	if (exposedByRule(value, key)) return "Served by a pattern rule";
+	return isExposed(value, key) ? "Served" : "Not served";
+}
+
+// promptExposeItems lists a server's prompts by their own names: the gateway lists them with the
+// client prefix, while the allow-list holds the server's names.
+export function promptExposeItems(client: Pick<MCPClient, "config" | "prompts">): MCPExposeItem[] {
+	const prefix = `${client.config.name}-`;
+	return (client.prompts ?? []).map((prompt) => {
+		const name = prompt.name.startsWith(prefix) ? prompt.name.slice(prefix.length) : prompt.name;
+		return {
+			key: name,
+			label: prompt.title || name,
+			detail: prompt.title ? name : undefined,
+			description: prompt.description,
+			arguments: (prompt.arguments ?? []).map((arg) => ({ name: arg.name, required: arg.required === true })),
+		};
+	});
+}
+
+// resourceExposeItems lists a server's resources by URI and its resource templates by URI template.
+export function resourceExposeItems(client: Pick<MCPClient, "resources" | "resource_templates">): MCPExposeItem[] {
+	return [
+		...(client.resources ?? []).map((r) => ({
+			key: r.uri,
+			label: r.title || r.name,
+			detail: r.uri,
+			description: r.description,
+			mimeType: r.mimeType,
+		})),
+		...(client.resource_templates ?? []).map((t) => ({
+			key: t.uriTemplate,
+			label: t.title || t.name,
+			detail: t.uriTemplate,
+			description: t.description,
+			mimeType: t.mimeType,
+		})),
+	];
 }

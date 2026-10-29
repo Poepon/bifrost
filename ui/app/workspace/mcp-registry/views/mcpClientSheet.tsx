@@ -1,21 +1,7 @@
-import {
-	AlertDialog,
-	AlertDialogAction,
-	AlertDialogCancel,
-	AlertDialogContent,
-	AlertDialogDescription,
-	AlertDialogFooter,
-	AlertDialogHeader,
-	AlertDialogTitle,
-} from "@/components/ui/alertDialog";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { Fragment } from "react";
 
-import { getExternalBaseUrl } from "@/app/workspace/mcp-registry/views/mcpUsageGuide/utils";
 import { VirtualKeySelector } from "@/components/entitySelectors/virtualKeySelector";
-import { SheetNavigationButtons } from "@/components/sheetNavigationButtons";
-import { CodeEditor } from "@/components/ui/codeEditor";
 import { Form, FormControl, FormField, FormItem, FormLabel, FormMessage } from "@/components/ui/form";
 import { HeadersTable } from "@/components/ui/headersTable";
 import { Input } from "@/components/ui/input";
@@ -29,13 +15,10 @@ import { Textarea } from "@/components/ui/textarea";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 import { TriStateCheckbox } from "@/components/ui/tristateCheckbox";
 import { useToast } from "@/hooks/use-toast";
-import { useCopyToClipboard } from "@/hooks/useCopyToClipboard";
-import { useSheetNavigation } from "@/hooks/useSheetNavigation";
 import { IS_ENTERPRISE, MCP_STATUS_COLORS } from "@/lib/constants/config";
 import {
 	getErrorMessage,
 	useGetCoreConfigQuery,
-	useGetVirtualMCPsQuery,
 	useLazyGetMCPClientOpenAPISpecQuery,
 	usePreviewOpenAPISpecMutation,
 	useUpdateMCPClientMutation
@@ -47,20 +30,19 @@ import {
 	resourceCredentialResendRequired,
 	type MCPClientUpdateSchema,
 } from "@/lib/types/schemas";
-import { VirtualMCP } from "@/lib/types/virtualMcps";
 import { parseArrayFromText } from "@/lib/utils/array";
-import { failureStageLabel, formatDurationSince, hasStateReason, stateReasonTitle } from "@/lib/utils/mcpConnectionFailure";
 import { perUserDiscoveryOn, supportsPerUserDiscovery, toolSubtitle } from "@/lib/utils/mcpPerUserDiscovery";
 import { titleCaseFromSnakeCase } from "@/lib/utils/strings";
 import { RbacOperation, RbacResource, useRbac } from "@enterprise/lib";
 import { useGetSCIMProvidersQuery } from "@enterprise/lib/store/apis/scimApi";
 import { zodResolver } from "@hookform/resolvers/zod";
-import { Check, ChevronDown, ChevronRight, Copy, Info, Plus, Trash2 } from "lucide-react";
+import { Info, Plus, Trash2 } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useForm } from "react-hook-form";
-import { MCPClientCredentialSection, MCPClientSessionsSection } from "./mcpClientCredentialSection";
+import { stateDescription, toolExecutionTimeoutToSeconds, toolSyncIntervalToMinutes } from "./mcpClientDetailsSheet.utils";
 import { MCPToolIconImage } from "./mcpToolIcon";
-import { MCPExposeList, type MCPExposeItem } from "./mcpExposeList";
+import { MCPExposeList } from "./mcpExposeList";
+import { promptExposeItems, resourceExposeItems } from "./mcpExposeList.utils";
 import {
 	applyParsedPreview,
 	buildOpenAPIConfigPayload,
@@ -81,7 +63,6 @@ import {
 	type OpenAPISourceMode
 } from "./mcpClientOpenApiUtils";
 import { MaxProtocolVersionSelect } from "./maxProtocolVersionSelect";
-import { ConnectionFailureBlock } from "./mcpConnectionFailure";
 import { OAuthAdvancedFields } from "./oauthAdvancedFields";
 import { OpenAPIPreviewPanel, type OpenAPIBaseUrlChoice } from "./openApiPreviewPanel";
 import { OpenAPISpecSource } from "./openApiSpecSource";
@@ -98,178 +79,34 @@ interface MCPClientSheetProps {
 	mcpClient: MCPClient;
 	onClose: () => void;
 	onSubmitSuccess: () => void;
-	onNavigate?: (direction: "prev" | "next") => void;
-	hasPrev?: boolean;
-	hasNext?: boolean;
 }
 
-// stateDescription is the sentence under the sheet title. The pending and
-// needs_reauth prose is unchanged; unstable and degraded gain a sentence
-// naming what Bifrost's last check ran into, and needs_reauth appends the
-// recorded reason so the explanation sits next to the instruction.
-function stateDescription(mcpClient: MCPClient, isPerUserAuth: boolean): string {
-	const failure = mcpClient.last_failure;
-	if (perUserDiscoveryOn(mcpClient.config)) {
-		const perUserDescription = perUserDiscoveryStateDescription(mcpClient);
-		if (perUserDescription) return perUserDescription;
-	}
-	switch (mcpClient.state) {
-		case "pending_verification":
-			return mcpClient.config.auth_type === "token_exchange"
-				? "This server needs a one-time verification: Bifrost exchanges your signed-in identity token, tests the connection, and discovers tools. Callers then have their own identity tokens exchanged automatically on every tool call."
-				: mcpClient.config.auth_type === "per_user_oauth"
-					? "This client was declared in config.json. An admin sign-in is needed to verify the OAuth setup and discover tools; Bifrost keeps it on file to refresh the tool list periodically. Each user will still authenticate individually when they use this server."
-					: "This client was declared in config.json and needs a one-time OAuth authorization before it can be used.";
-		case "needs_reauth": {
-			// Each auth type names the repair action the actions menu actually
-			// offers for it, matching the credential block below.
-			const base =
-				mcpClient.config.auth_type === "token_exchange"
-					? "The admin credential Bifrost keeps on file to refresh this server's tool list needs repair. Callers' tool calls are unaffected. Use Re-verify as me from the server's actions menu to fix it."
-					: isPerUserAuth
-						? "The admin credential Bifrost keeps on file to refresh this server's tool list needs repair. End-user credentials and tool calls are unaffected. Use Refresh admin credential from the server's actions menu to fix it."
-						: "This connection's credentials need to be re-authorized. Use Reauthorize from the server's actions menu to redo the OAuth consent flow.";
-			return failure ? `${base} Reason: ${failure.message}` : base;
-		}
-		case "unstable":
-			return failure
-				? `Bifrost's last connection check failed ${formatDurationSince(failure.at)} ago while ${failureStageLabel(failure.stage).toLowerCase()}. Tool calls are still attempted normally; the next check runs within about 10 seconds.`
-				: "Bifrost's last connection check failed. Tool calls are still attempted normally; the next check runs within about 10 seconds.";
-		case "degraded":
-			return "Instances of this deployment disagree about this server's state. Tool calls are still attempted on every instance.";
-		default:
-			return "MCP server configuration and available tools";
-	}
-}
-
-// perUserDiscoveryStateDescription is the sentence for a server with
-// per_user_discovery on while it is pending or healthy: its admin step only
-// verifies the server, and each caller discovers tools with their own
-// credential. Other states keep their general wording.
-function perUserDiscoveryStateDescription(mcpClient: MCPClient): string | undefined {
-	switch (mcpClient.state) {
-		case "pending_verification":
-			switch (mcpClient.config.auth_type) {
-				case "token_exchange":
-					return "This server needs a one-time verification: Bifrost exchanges your signed-in identity token and tests the connection. Nothing from it is kept: each caller's tools, prompts and resources are discovered with their own identity token.";
-				case "per_user_oauth":
-					return "An admin sign-in is needed once to verify the OAuth setup. Nothing from it is kept: each caller's tools, prompts and resources are discovered when they sign in.";
-				default:
-					return "Verify this server once with sample header values to test the connection. Nothing from it is kept: each caller's tools, prompts and resources are discovered with their own headers.";
-			}
-		case "healthy":
-			return "Each caller's tools, prompts and resources are discovered with their own credential when they connect. This server keeps no admin credential.";
-		default:
-			return undefined;
-	}
-}
-
-/** API sends tool_sync_interval as nanoseconds (Go time.Duration). Normalize to minutes for form/store. */
-function toolSyncIntervalToMinutes(v: number | undefined | null): number {
-	if (v === undefined || v === null) return 0;
-	const n = Number(v);
-	if (Number.isNaN(n)) return 0;
-	if (Math.abs(n) >= 1e9) return Math.round(n / 6e10);
-	return n;
-}
-
-/** API sends tool_execution_timeout as a Go duration string e.g. "30s". Normalize to whole seconds for form. */
-function toolExecutionTimeoutToSeconds(v: string | number | undefined | null): number {
-	if (v === undefined || v === null || v === "") return 0;
-	if (typeof v === "number") return v;
-	// Parse Go duration string: "30s", "1m30s", "2h", etc.
-	let total = 0;
-	const re = /(\d+(?:\.\d+)?)(ns|us|µs|ms|s|m|h)/g;
-	let match;
-	while ((match = re.exec(v)) !== null) {
-		const n = parseFloat(match[1]);
-		switch (match[2]) {
-			case "ns":
-				total += n / 1e9;
-				break;
-			case "us":
-			case "µs":
-				total += n / 1e6;
-				break;
-			case "ms":
-				total += n / 1e3;
-				break;
-			case "s":
-				total += n;
-				break;
-			case "m":
-				total += n * 60;
-				break;
-			case "h":
-				total += n * 3600;
-				break;
-		}
-	}
-	return Math.ceil(total);
-}
-
-export default function MCPClientSheet({
-	mcpClient,
-	onClose,
-	onSubmitSuccess,
-	onNavigate,
-	hasPrev = false,
-	hasNext = false,
-}: MCPClientSheetProps) {
+/**
+ * MCPClientSheet edits one MCP server's settings. It opens from the servers
+ * table's actions menu; the read-only view of the server is
+ * MCPClientDetailsSheet.
+ */
+export default function MCPClientSheet({ mcpClient, onClose, onSubmitSuccess }: MCPClientSheetProps) {
 	const hasUpdateMCPClientAccess = useRbac(RbacResource.MCPGateway, RbacOperation.Update);
 	const isPerUserAuth =
 		mcpClient.config.auth_type === "per_user_oauth" ||
 		mcpClient.config.auth_type === "per_user_headers" ||
 		mcpClient.config.auth_type === "token_exchange";
-	// Auth types whose server holds an OAuth credential of its own: the shared
-	// token, or the retained admin token used to refresh the tool list.
-	const holdsOwnOauthCredential =
-		mcpClient.config.auth_type === "oauth" ||
-		mcpClient.config.auth_type === "per_user_oauth" ||
-		mcpClient.config.auth_type === "token_exchange";
 	const [updateMCPClient, { isLoading: isUpdating }] = useUpdateMCPClientMutation();
 
 	const { toast } = useToast();
 
-	const [pendingNavDirection, setPendingNavDirection] = useState<"prev" | "next" | null>(null);
 	const [selectedTab, setSelectedTab] = useState("general");
-
-	// Land back on the General tab whenever a different client is opened (e.g. via prev/next navigation).
-	useEffect(() => {
-		setSelectedTab("general");
-	}, [mcpClient.config.client_id]);
 
 	const { data: bifrostConfig } = useGetCoreConfigQuery({ fromDB: true });
 	const globalToolSyncInterval = bifrostConfig?.client_config?.mcp_tool_sync_interval ?? 10;
 	const globalMaxProtocolVersion = bifrostConfig?.client_config?.mcp_max_protocol_version || "auto";
 	const globalToolExecutionTimeout = bifrostConfig?.client_config?.mcp_tool_execution_timeout ?? 30;
 	const globalMaxInstructionsLength = bifrostConfig?.client_config?.mcp_max_instructions_per_client || 4096;
-	// External base URL + copy for the read-only endpoint the client is served at (/mcp/<slug>).
-	const baseUrl = getExternalBaseUrl(bifrostConfig?.client_config);
-	const { copy: copyEndpoint, copied: endpointCopied } = useCopyToClipboard({ successMessage: "Endpoint copied" });
-	const [expandedTools, setExpandedTools] = useState<Set<string>>(new Set());
 
 	const allToolNames = useMemo(() => mcpClient.tools?.map((t) => t.name) ?? [], [mcpClient.tools]);
-	// Prompts are listed with the client prefix; the allow-list holds the server's own names.
-	const promptExposeItems = useMemo<MCPExposeItem[]>(() => {
-		const prefix = `${mcpClient.config.name}-`;
-		return (mcpClient.prompts ?? []).map((prompt) => {
-			const name = prompt.name.startsWith(prefix) ? prompt.name.slice(prefix.length) : prompt.name;
-			return { key: name, label: prompt.title || name, detail: prompt.title ? name : undefined, description: prompt.description };
-		});
-	}, [mcpClient.prompts, mcpClient.config.name]);
-	const resourceExposeItems = useMemo<MCPExposeItem[]>(
-		() => [
-			...(mcpClient.resources ?? []).map((r) => ({ key: r.uri, label: r.title || r.name, detail: r.uri, description: r.description })),
-			...(mcpClient.resource_templates ?? []).map((t) => ({
-				key: t.uriTemplate,
-				label: t.title || t.name,
-				detail: t.uriTemplate,
-				description: t.description,
-			})),
-		],
-		[mcpClient.resources, mcpClient.resource_templates],
-	);
+	const promptItems = useMemo(() => promptExposeItems(mcpClient), [mcpClient]);
+	const resourceItems = useMemo(() => resourceExposeItems(mcpClient), [mcpClient]);
 
 	// Initial VK configs come directly from the MCP client response — always complete, no pagination issue.
 	const initialVKConfigs = useMemo<MCPVKConfig[]>(
@@ -320,20 +157,6 @@ export default function MCPClientSheet({
 	}, [mcpClient.vk_configs, localVKNames]);
 
 	const configuredVKIDs = useMemo(() => vkConfigs.map((vc) => vc.virtual_key_id), [vkConfigs]);
-
-	// Reverse lookup for the Access tab: which Virtual MCPs bundle this server's
-	// tools. There's no dedicated endpoint, but the list response already carries
-	// every vMCP's tools[].mcp_client_id, so membership is derived client-side.
-	const { data: virtualMcpsData, isLoading: virtualMcpsLoading, isError: virtualMcpsError } = useGetVirtualMCPsQuery({ limit: 1000 });
-	const memberVirtualMcps = useMemo(() => {
-		const clientID = mcpClient.config.client_id;
-		const out: { vmcp: VirtualMCP; toolNames: string[] }[] = [];
-		for (const vmcp of virtualMcpsData?.virtual_mcps ?? []) {
-			const spec = vmcp.tools.find((t) => t.mcp_client_id === clientID);
-			if (spec) out.push({ vmcp, toolNames: spec.tool_names });
-		}
-		return out;
-	}, [virtualMcpsData, mcpClient.config.client_id]);
 
 	const toolOptions = useMemo(
 		() => [
@@ -543,18 +366,6 @@ export default function MCPClientSheet({
 		setVKConfigsDirty(true);
 	};
 
-	const toggleToolExpanded = (toolName: string) => {
-		setExpandedTools((prev) => {
-			const next = new Set(prev);
-			if (next.has(toolName)) {
-				next.delete(toolName);
-			} else {
-				next.add(toolName);
-			}
-			return next;
-		});
-	};
-
 	const form = useForm<MCPClientUpdateSchema>({
 		resolver: zodResolver(mcpClientUpdateSchema),
 		mode: "onBlur",
@@ -751,24 +562,6 @@ export default function MCPClientSheet({
 	// Gates the warning below its toggle: turning per_user_discovery on or off
 	// deletes what the server keeps as part of the same update.
 	const perUserDiscoveryDirty = !!form.formState.dirtyFields.per_user_discovery;
-
-	const handleNavigate = useCallback(
-		(direction: "prev" | "next") => {
-			if (isDirty) {
-				setPendingNavDirection(direction);
-			} else {
-				onNavigate?.(direction);
-			}
-		},
-		[isDirty, onNavigate],
-	);
-
-	const { prev: prevKeys, next: nextKeys } = useSheetNavigation({
-		enabled: !pendingNavDirection,
-		hasPrev,
-		hasNext,
-		onNavigate: handleNavigate,
-	});
 
 	const onSubmit = async (data: MCPClientUpdateSchema) => {
 		try {
@@ -1096,24 +889,16 @@ export default function MCPClientSheet({
 	return (
 		<>
 			<Sheet open onOpenChange={(open) => !open && onClose()}>
-				<SheetContent className="flex w-full flex-col overflow-hidden! pt-4 sm:max-w-[60%]">
+				<SheetContent className="flex w-full flex-col overflow-hidden! pt-4 sm:max-w-[60%]" data-testid="mcpclient-edit-sheet">
 					<SheetHeader className="w-full p-0 py-4" showCloseButton={false} headerClassName="mb-0 sticky -top-4 bg-card z-10 px-4 md:px-8">
 						<div className="flex w-full items-center justify-between">
 							<div className="space-y-2">
-								<SheetTitle className="flex w-fit items-center gap-2 font-medium">
-									{mcpClient.config.name}
+								<SheetTitle className="flex w-fit items-center gap-2 font-medium" data-testid="mcpclient-edit-title">
+									Edit {mcpClient.config.name}
 									<Badge className={MCP_STATUS_COLORS[mcpClient.state]}>{titleCaseFromSnakeCase(mcpClient.state)}</Badge>
 								</SheetTitle>
 								<SheetDescription>{stateDescription(mcpClient, isPerUserAuth)}</SheetDescription>
 							</div>
-							<SheetNavigationButtons
-								hasPrev={hasPrev}
-								hasNext={hasNext}
-								onNavigate={handleNavigate}
-								prevKeys={prevKeys}
-								nextKeys={nextKeys}
-								entityLabel="server"
-							/>
 						</div>
 					</SheetHeader>
 					<Form {...form}>
@@ -1131,8 +916,11 @@ export default function MCPClientSheet({
 											<TabsTrigger value="tools" data-testid="mcpclient-tab-tools">
 												Tools
 											</TabsTrigger>
+											<TabsTrigger value="prompts" data-testid="mcpclient-tab-prompts">
+												Prompts
+											</TabsTrigger>
 											<TabsTrigger value="resources" data-testid="mcpclient-tab-resources">
-												Prompts & Resources
+												Resources
 											</TabsTrigger>
 											<TabsTrigger value="access" data-testid="mcpclient-tab-access">
 												Access
@@ -1141,17 +929,11 @@ export default function MCPClientSheet({
 									</div>
 
 									<TabsContent value="general" className="space-y-6 pb-10">
-										{hasStateReason(mcpClient) && (
-											<div className="space-y-4">
-												<SectionHeader
-													title={mcpClient.node_states ? "Connection checks across instances" : "Last connection check"}
-													description={stateReasonTitle(mcpClient.state, !!mcpClient.node_states)}
-												/>
-												<ConnectionFailureBlock client={mcpClient} />
-											</div>
-										)}
 										<div className="space-y-4">
-											<SectionHeader title="Basic Information" description="Identify this server and review its connection details." />
+											<SectionHeader
+												title="Basic Information"
+												description={isOpenAPIClient ? "Name this server, or replace its OpenAPI document." : "Identify this server."}
+											/>
 											<FormField
 												control={form.control}
 												name="name"
@@ -1183,39 +965,6 @@ export default function MCPClientSheet({
 													</FormItem>
 												)}
 											/>
-											{/* Read-only connection summary. Connection type and target
-										    can't be changed after create — surface them here for
-										    visibility without exposing edit controls. */}
-											<div className="flex flex-col gap-2">
-												{/* An OpenAPI server is generated, not connected to: its summary
-												    names the source and the API it calls, not a transport. */}
-												<div className="text-sm font-medium">{isOpenAPIClient ? "Server source" : "Connection"}</div>
-												<div className="bg-muted/40 text-muted-foreground rounded-md border px-3 py-2 text-sm" data-testid="mcp-client-sheet-connection-summary">
-													{isOpenAPIClient ? (
-														<span className="text-foreground text-xs">Generated from an OpenAPI spec</span>
-													) : (
-														<span className="text-foreground font-mono text-xs uppercase">
-															{mcpClient.config.connection_type === "stdio"
-																? "STDIO"
-																: mcpClient.config.connection_type === "sse"
-																	? "SSE"
-																	: "HTTP"}
-														</span>
-													)}
-													<span className="mx-2">·</span>
-													{isOpenAPIClient && <span className="mr-1">calls</span>}
-													<span className="font-mono break-all">
-														{mcpClient.config.connection_type === "stdio"
-															? `${mcpClient.config.stdio_config?.command ?? ""} ${(mcpClient.config.stdio_config?.args ?? []).join(" ")}`.trim() ||
-															"-"
-															: mcpClient.config.connection_type === "openapi"
-																? mcpClient.config.openapi_config?.base_url || "base URL from the document's servers"
-																: mcpClient.config.connection_string?.type === "env" || mcpClient.config.connection_string?.type === "vault"
-																	? mcpClient.config.connection_string.ref
-																	: mcpClient.config.connection_string?.value || "-"}
-													</span>
-												</div>
-											</div>
 											{isOpenAPIClient && (
 												<div className="space-y-3" data-testid="mcp-client-sheet-openapi-section">
 													<div className="flex items-start justify-between gap-3">
@@ -1315,43 +1064,6 @@ export default function MCPClientSheet({
 													)}
 												</div>
 											)}
-											{mcpClient.config.endpoint_slug && (
-												<div className="flex flex-col gap-2">
-													<div className="text-sm font-medium">Endpoint</div>
-													<div className="bg-muted/40 text-muted-foreground flex items-center justify-between gap-2 rounded-md border px-3 py-2 text-sm">
-														<span className="font-mono break-all">/mcp/{mcpClient.config.endpoint_slug}</span>
-														<button
-															type="button"
-															onClick={() => copyEndpoint(`${baseUrl}/mcp/${mcpClient.config.endpoint_slug}`)}
-															className="text-muted-foreground hover:text-foreground shrink-0 cursor-pointer"
-															aria-label="Copy endpoint URL"
-															data-testid={`mcp-client-sheet-endpoint-copy-${mcpClient.config.endpoint_slug}`}
-														>
-															{endpointCopied ? <Check className="size-3.5" /> : <Copy className="size-3.5" />}
-														</button>
-													</div>
-												</div>
-											)}
-											{mcpClient.config.connection_type === "stdio" &&
-												mcpClient.config.stdio_config?.envs &&
-												mcpClient.config.stdio_config.envs.length > 0 && (
-													<div className="space-y-2">
-														<div className="text-sm font-medium">Environment Variables</div>
-														<HeadersTable
-															value={Object.fromEntries(
-																mcpClient.config.stdio_config.envs.map((env) => {
-																	const [name, ...valueParts] = env.split("=");
-																	return [name, valueParts.join("=")];
-																}),
-															)}
-															onChange={() => { }}
-															fixedKeys={mcpClient.config.stdio_config.envs.map((env) => env.split("=")[0])}
-															valuePlaceholder="—"
-															label=""
-															disabled
-														/>
-													</div>
-												)}
 										</div>
 
 										<DottedSeparator />
@@ -1835,13 +1547,6 @@ export default function MCPClientSheet({
 											</>
 										)}
 
-										{mcpClient.config.auth_type === "per_user_headers" && (
-											<>
-												<DottedSeparator />
-												<MCPClientCredentialSection mcpClient={mcpClient} />
-											</>
-										)}
-
 										<DottedSeparator />
 										<div className="space-y-4">
 											<SectionHeader
@@ -1880,20 +1585,6 @@ export default function MCPClientSheet({
 												)}
 											/>
 										</div>
-
-										{holdsOwnOauthCredential && (
-											<>
-												<DottedSeparator />
-												<MCPClientCredentialSection mcpClient={mcpClient} />
-											</>
-										)}
-
-										{(mcpClient.config.auth_type === "per_user_oauth" || mcpClient.config.auth_type === "per_user_headers") && (
-											<>
-												<DottedSeparator />
-												<MCPClientSessionsSection mcpClient={mcpClient} />
-											</>
-										)}
 
 										{(() => {
 											const showTLS = mcpClient.config.connection_type === "http" || mcpClient.config.connection_type === "sse";
@@ -2190,7 +1881,6 @@ export default function MCPClientSheet({
 													<Table>
 														<TableHeader>
 															<TableRow>
-																<TableHead className="w-10"></TableHead>
 																<TableHead className="max-w-[300px]">Tool Name</TableHead>
 																<TableHead className="w-24 text-center">Enabled</TableHead>
 																<TableHead className="w-28 text-center">
@@ -2224,170 +1914,105 @@ export default function MCPClientSheet({
 															</TableRow>
 														</TableHeader>
 														<TableBody>
-															{mcpClient.tools.map((tool, index) => {
+															{mcpClient.tools.map((tool) => {
 																const currentTools = form.watch("tools_to_execute") || [];
 																const currentAutoExecute = form.watch("tools_to_auto_execute") || [];
 																const isToolEnabled = currentTools?.includes("*") || currentTools?.includes(tool.name);
 																const isAutoExecuteEnabled =
 																	(currentAutoExecute?.includes("*") && isToolEnabled) ||
 																	(currentAutoExecute?.includes(tool.name) && isToolEnabled);
-																const isExpanded = expandedTools.has(tool.name);
 
 																return (
-																	<Fragment key={index}>
-																		<TableRow className="group">
-																			<TableCell className="p-2">
-																				<button
-																					type="button"
-																					className="hover:bg-muted flex h-8 w-8 items-center justify-center rounded-md transition-colors"
-																					onClick={() => toggleToolExpanded(tool.name)}
-																					data-testid={`mcp-tool-expand-${tool.name}`}
-																				>
-																					{isExpanded ? <ChevronDown className="h-4 w-4" /> : <ChevronRight className="h-4 w-4" />}
-																				</button>
-																			</TableCell>
-																			<TableCell className="max-w-[300px]">
-																				<div className="flex min-w-0 items-start gap-2">
-																					<MCPToolIconImage tool={tool} />
-																					<div className="min-w-0">
-																						<div className="text-foreground truncate text-sm font-medium" data-testid={`mcp-tool-title-${tool.name}`}>
-																							{tool.title || tool.annotations?.title || tool.name}
-																						</div>
-																						{(tool.title || tool.annotations?.title) && (tool.title || tool.annotations?.title) !== tool.name && (
-																							<div className="text-muted-foreground truncate font-mono text-xs">{tool.name}</div>
-																						)}
-																						{toolSubtitle(mcpClient, tool) && (
-																							<p className="text-muted-foreground mt-0.5 truncate text-xs">{toolSubtitle(mcpClient, tool)}</p>
-																						)}
+																	<TableRow key={tool.name} className="group">
+																		<TableCell className="max-w-[300px]">
+																			<div className="flex min-w-0 items-start gap-2">
+																				<MCPToolIconImage tool={tool} />
+																				<div className="min-w-0">
+																					<div className="text-foreground truncate text-sm font-medium" data-testid={`mcp-tool-title-${tool.name}`}>
+																						{tool.title || tool.annotations?.title || tool.name}
 																					</div>
+																					{(tool.title || tool.annotations?.title) && (tool.title || tool.annotations?.title) !== tool.name && (
+																						<div className="text-muted-foreground truncate font-mono text-xs">{tool.name}</div>
+																					)}
+																					{toolSubtitle(mcpClient, tool) && (
+																						<p className="text-muted-foreground mt-0.5 truncate text-xs">{toolSubtitle(mcpClient, tool)}</p>
+																					)}
 																				</div>
-																			</TableCell>
-																			<TableCell className="text-center">
-																				<FormField
-																					control={form.control}
-																					name="tools_to_execute"
-																					render={() => (
-																						<FormItem>
-																							<FormControl>
-																								<div className="flex h-11 w-11 items-center justify-center">
-																									<Switch
-																										size="md"
-																										checked={isToolEnabled}
-																										aria-label={`${isToolEnabled ? "Disable" : "Enable"} ${tool.name}`}
-																										onCheckedChange={(checked) => handleToolToggle(tool.name, checked)}
-																									/>
-																								</div>
-																							</FormControl>
-																						</FormItem>
-																					)}
-																				/>
-																			</TableCell>
-																			<TableCell className="text-center">
-																				<FormField
-																					control={form.control}
-																					name="tools_to_auto_execute"
-																					render={() => (
-																						<FormItem>
-																							<FormControl>
-																								<div className="flex h-11 w-11 items-center justify-center">
-																									<Switch
-																										size="md"
-																										checked={isAutoExecuteEnabled}
-																										disabled={!isToolEnabled}
-																										aria-label={`${isAutoExecuteEnabled ? "Disable" : "Enable"} auto-execute for ${tool.name}`}
-																										onCheckedChange={(checked) => handleAutoExecuteToggle(tool.name, checked)}
-																									/>
-																								</div>
-																							</FormControl>
-																						</FormItem>
-																					)}
-																				/>
-																			</TableCell>
-																			<TableCell className="text-center">
-																				<FormField
-																					control={form.control}
-																					name="tool_pricing"
-																					render={({ field }) => (
-																						<FormItem>
-																							<FormControl>
-																								<Input
-																									type="number"
-																									step="0.000001"
-																									min="0"
-																									placeholder="0.00"
-																									className="h-8 w-24"
-																									disabled={!isToolEnabled}
-																									value={field.value?.[tool.name] ?? ""}
-																									onChange={(e) => {
-																										const value = e.target.value === "" ? undefined : parseFloat(e.target.value);
-																										const newPricing = { ...field.value };
-																										if (value === undefined || isNaN(value)) {
-																											delete newPricing[tool.name];
-																										} else {
-																											newPricing[tool.name] = value;
-																										}
-																										field.onChange(newPricing);
-																									}}
+																			</div>
+																		</TableCell>
+																		<TableCell className="text-center">
+																			<FormField
+																				control={form.control}
+																				name="tools_to_execute"
+																				render={() => (
+																					<FormItem>
+																						<FormControl>
+																							<div className="flex h-11 w-11 items-center justify-center">
+																								<Switch
+																									size="md"
+																									checked={isToolEnabled}
+																									aria-label={`${isToolEnabled ? "Disable" : "Enable"} ${tool.name}`}
+																									onCheckedChange={(checked) => handleToolToggle(tool.name, checked)}
 																								/>
-																							</FormControl>
-																						</FormItem>
-																					)}
-																				/>
-																			</TableCell>
-																		</TableRow>
-																		{isExpanded && (
-																			<tr>
-																				<td colSpan={5} className="p-0">
-																					<div className="bg-muted/30 border-b px-4 py-3">
-																						<div className="text-muted-foreground mb-2 text-xs font-medium">Parameters Schema</div>
-																						{perUserDiscoveryOn(mcpClient.config) ? (
-																							<div className="text-muted-foreground text-sm">
-																								Schemas can differ from one caller to another, so none is shown.
 																							</div>
-																						) : tool.parameters ? (
-																							<CodeEditor
-																								className="z-0 w-full rounded-sm border"
-																								shouldAdjustInitialHeight={true}
-																								maxHeight={300}
-																								wrap={true}
-																								code={JSON.stringify(tool.parameters, null, 2)}
-																								lang="json"
-																								readonly={true}
-																								options={{
-																									scrollBeyondLastLine: false,
-																									collapsibleBlocks: true,
-																									lineNumbers: "off",
-																									alwaysConsumeMouseWheel: false,
+																						</FormControl>
+																					</FormItem>
+																				)}
+																			/>
+																		</TableCell>
+																		<TableCell className="text-center">
+																			<FormField
+																				control={form.control}
+																				name="tools_to_auto_execute"
+																				render={() => (
+																					<FormItem>
+																						<FormControl>
+																							<div className="flex h-11 w-11 items-center justify-center">
+																								<Switch
+																									size="md"
+																									checked={isAutoExecuteEnabled}
+																									disabled={!isToolEnabled}
+																									aria-label={`${isAutoExecuteEnabled ? "Disable" : "Enable"} auto-execute for ${tool.name}`}
+																									onCheckedChange={(checked) => handleAutoExecuteToggle(tool.name, checked)}
+																								/>
+																							</div>
+																						</FormControl>
+																					</FormItem>
+																				)}
+																			/>
+																		</TableCell>
+																		<TableCell className="text-center">
+																			<FormField
+																				control={form.control}
+																				name="tool_pricing"
+																				render={({ field }) => (
+																					<FormItem>
+																						<FormControl>
+																							<Input
+																								type="number"
+																								step="0.000001"
+																								min="0"
+																								placeholder="0.00"
+																								className="h-8 w-24"
+																								disabled={!isToolEnabled}
+																								value={field.value?.[tool.name] ?? ""}
+																								onChange={(e) => {
+																									const value = e.target.value === "" ? undefined : parseFloat(e.target.value);
+																									const newPricing = { ...field.value };
+																									if (value === undefined || isNaN(value)) {
+																										delete newPricing[tool.name];
+																									} else {
+																										newPricing[tool.name] = value;
+																									}
+																									field.onChange(newPricing);
 																								}}
 																							/>
-																						) : (
-																							<div className="text-muted-foreground text-sm">No parameters defined</div>
-																						)}
-																						{tool.output_schema && (
-																							<div data-testid={`mcp-tool-output-schema-${tool.name}`}>
-																								<div className="text-muted-foreground mt-3 mb-2 text-xs font-medium">Output Schema</div>
-																								<CodeEditor
-																									className="z-0 w-full rounded-sm border"
-																									shouldAdjustInitialHeight={true}
-																									maxHeight={300}
-																									wrap={true}
-																									code={JSON.stringify(tool.output_schema, null, 2)}
-																									lang="json"
-																									readonly={true}
-																									options={{
-																										scrollBeyondLastLine: false,
-																										collapsibleBlocks: true,
-																										lineNumbers: "off",
-																										alwaysConsumeMouseWheel: false,
-																									}}
-																								/>
-																							</div>
-																						)}
-																					</div>
-																				</td>
-																			</tr>
-																		)}
-																	</Fragment>
+																						</FormControl>
+																					</FormItem>
+																				)}
+																			/>
+																		</TableCell>
+																	</TableRow>
 																);
 															})}
 														</TableBody>
@@ -2405,7 +2030,7 @@ export default function MCPClientSheet({
 										</div>
 									</TabsContent>
 
-									<TabsContent value="resources" className="space-y-8 pb-10">
+									<TabsContent value="prompts" className="pb-10">
 										<FormField
 											control={form.control}
 											name="prompts_to_expose"
@@ -2414,12 +2039,15 @@ export default function MCPClientSheet({
 													kind="prompts"
 													title="Prompts"
 													description="Prompts this server lists, and which of them MCP clients connected to Bifrost can use."
-													items={promptExposeItems}
+													items={promptItems}
 													value={field.value}
 													onChange={(next) => form.setValue("prompts_to_expose", next, { shouldDirty: true })}
 												/>
 											)}
 										/>
+									</TabsContent>
+
+									<TabsContent value="resources" className="pb-10">
 										<FormField
 											control={form.control}
 											name="resources_to_expose"
@@ -2428,7 +2056,7 @@ export default function MCPClientSheet({
 													kind="resources"
 													title="Resources"
 													description="Resources and resource templates this server lists, and which of them MCP clients connected to Bifrost can read."
-													items={resourceExposeItems}
+													items={resourceItems}
 													value={field.value}
 													onChange={(next) => form.setValue("resources_to_expose", next, { shouldDirty: true })}
 												/>
@@ -2585,65 +2213,12 @@ export default function MCPClientSheet({
 											)}
 										</div>
 
-										<DottedSeparator />
-
-										<div className="space-y-4">
-											<SectionHeader
-												title="Virtual MCPs"
-												description="Virtual MCPs that bundle this server's tools and re-serve them at their own endpoint."
-											/>
-											{virtualMcpsLoading ? (
-												<div className="text-muted-foreground rounded-sm border p-6 text-center">
-													<p className="text-sm">Loading virtual MCPs…</p>
-												</div>
-											) : virtualMcpsError ? (
-												<div className="text-muted-foreground rounded-sm border p-6 text-center">
-													<p className="text-sm">Couldn't load virtual MCPs.</p>
-												</div>
-											) : memberVirtualMcps.length > 0 ? (
-												<div className="rounded-md border">
-													<Table>
-														<TableHeader>
-															<TableRow>
-																<TableHead>Virtual MCP</TableHead>
-																<TableHead>Endpoint</TableHead>
-																<TableHead>Exposed Tools</TableHead>
-															</TableRow>
-														</TableHeader>
-														<TableBody>
-															{memberVirtualMcps.map(({ vmcp, toolNames }) => (
-																<TableRow key={vmcp.id}>
-																	<TableCell className="font-medium">
-																		<div className="flex items-center gap-2">
-																			{vmcp.name}
-																			{!vmcp.enabled && (
-																				<Badge variant="secondary" className="text-xs font-normal">
-																					Disabled
-																				</Badge>
-																			)}
-																		</div>
-																	</TableCell>
-																	<TableCell className="text-muted-foreground font-mono text-xs">/mcp/{vmcp.endpoint_slug}</TableCell>
-																	<TableCell className="text-muted-foreground text-sm">
-																		{toolNames.includes("*") ? "All tools" : toolNames.length === 0 ? "No tools" : toolNames.join(", ")}
-																	</TableCell>
-																</TableRow>
-															))}
-														</TableBody>
-													</Table>
-												</div>
-											) : (
-												<div className="text-muted-foreground rounded-sm border p-6 text-center">
-													<p className="text-sm">This server isn't part of any virtual MCP.</p>
-												</div>
-											)}
-										</div>
 									</TabsContent>
 								</Tabs>
 							</div>
 
 							<div className="bg-card sticky bottom-0 z-10 flex justify-end gap-2 border-t px-4 py-4 md:px-8">
-								<Button type="button" variant="outline" onClick={onClose}>
+								<Button type="button" variant="outline" onClick={onClose} data-testid="mcpclient-cancel-btn">
 									Cancel
 								</Button>
 								<TooltipProvider>
@@ -2672,28 +2247,6 @@ export default function MCPClientSheet({
 					</Form>
 				</SheetContent>
 			</Sheet>
-			<AlertDialog open={!!pendingNavDirection} onOpenChange={(open) => !open && setPendingNavDirection(null)}>
-				<AlertDialogContent>
-					<AlertDialogHeader>
-						<AlertDialogTitle>Unsaved Changes</AlertDialogTitle>
-						<AlertDialogDescription>
-							You have unsaved changes. Are you sure you want to navigate away? Your changes will be lost.
-						</AlertDialogDescription>
-					</AlertDialogHeader>
-					<AlertDialogFooter>
-						<AlertDialogCancel onClick={() => setPendingNavDirection(null)}>Cancel</AlertDialogCancel>
-						<AlertDialogAction
-							onClick={() => {
-								const dir = pendingNavDirection;
-								setPendingNavDirection(null);
-								if (dir) onNavigate?.(dir);
-							}}
-						>
-							Discard Changes
-						</AlertDialogAction>
-					</AlertDialogFooter>
-				</AlertDialogContent>
-			</AlertDialog>
 		</>
 	);
 }

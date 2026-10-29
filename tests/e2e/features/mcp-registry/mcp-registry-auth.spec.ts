@@ -244,8 +244,20 @@ test.describe("MCP Registry - Authentication", () => {
       expect(actions).not.toContain("Refresh admin credential");
       expect(actions).not.toContain("Refresh tools");
 
+      // The view says what the server keeps: no admin credential, and only the tool names callers' discoveries return.
       await mcpRegistryPage.viewClientDetails(clientData.name);
-      const sheet = mcpRegistryPage.detailSheet;
+      const view = mcpRegistryPage.viewSheet;
+      await expect(view.getByTestId("mcpclient-view-summary")).toContainText("Per-Caller Discovery");
+      await expect(view.getByTestId("mcpclient-view-row-per_user_discovery")).toHaveText("On");
+      await expect(view.getByTestId("mcpclient-view-row-tool_sync_interval")).toHaveText("Not used");
+      await expect(view.getByTestId("mcpclient-credential-section")).toHaveCount(0);
+      await expect(view.getByTestId("mcpclient-view-tab-callers")).toBeVisible();
+      await view.getByTestId("mcpclient-view-tab-tools").click();
+      await expect(view.getByRole("tabpanel").getByText("No caller has connected yet")).toBeVisible();
+      await mcpRegistryPage.closeDetailSheet();
+
+      await mcpRegistryPage.openClientEditor(clientData.name);
+      const sheet = mcpRegistryPage.editSheet;
       const discoverySwitch = sheet.getByTestId("mcpclient-per-user-discovery-switch");
       await expect(discoverySwitch).toHaveAttribute("data-state", "checked");
       await expect(sheet.getByTestId("mcpclient-tool-sync-interval-input")).toBeDisabled();
