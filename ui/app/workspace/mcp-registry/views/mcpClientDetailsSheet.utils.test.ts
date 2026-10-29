@@ -280,6 +280,26 @@ describe("accessStat", () => {
 			sub: "and 2 virtual keys · 1 Virtual MCP",
 		});
 	});
+
+	it("counts the grants a build adds, by the noun the build gives them", () => {
+		const grants = (count: number) => ({ count, noun: { one: "grant", many: "grants" } });
+		expect(accessStat(config(), 3, 1, grants(2))).toEqual({
+			value: "3 keys · 2 grants",
+			sub: "and 1 Virtual MCP · not allowed by default",
+		});
+		expect(accessStat(config(), 1, 0, grants(1))).toEqual({ value: "1 key · 1 grant", sub: "not allowed by default" });
+		expect(accessStat(config(), 0, 0, grants(2))).toEqual({ value: "2 grants", sub: "not allowed by default" });
+		expect(accessStat(config(), 3, 0, grants(0))).toEqual({ value: "3 virtual keys", sub: "not allowed by default" });
+		expect(accessStat(config(), 0, 0, grants(0))).toEqual({ value: "No access", sub: "not allowed by default" });
+		expect(accessStat(config({ allow_by_default: true }), 0, 0, grants(0))).toEqual({
+			value: "Allowed by default",
+			sub: "no key or grant overrides",
+		});
+		expect(accessStat(config({ allow_by_default: true }), 2, 1, grants(3))).toEqual({
+			value: "Allowed by default",
+			sub: "and 2 virtual keys · 3 grants · 1 Virtual MCP",
+		});
+	});
 });
 
 describe("toolHints", () => {

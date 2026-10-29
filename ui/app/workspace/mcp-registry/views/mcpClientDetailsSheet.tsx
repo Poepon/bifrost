@@ -10,6 +10,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { useCopyToClipboard } from "@/hooks/useCopyToClipboard";
 import { useSheetNavigation } from "@/hooks/useSheetNavigation";
 import { MCP_CREDENTIAL_STATUS_COLORS, MCP_STATUS_COLORS } from "@/lib/constants/config";
+import { getMCPClientAccessGrants, useMCPClientAccessGrantCount } from "@/lib/registries/mcpClientAccessGrants";
 import { useGetCoreConfigQuery, useGetMCPSessionsQuery, useGetVirtualMCPsQuery } from "@/lib/store";
 import { MCPClient, MCPClientTool } from "@/lib/types/mcp";
 import { MCPSessionStatus } from "@/lib/types/mcpSessions";
@@ -50,6 +51,7 @@ import { MCPExposeList } from "./mcpExposeList";
 import { promptExposeItems, resourceExposeItems } from "./mcpExposeList.utils";
 import { MCPToolIconImage } from "./mcpToolIcon";
 import { SectionHeader } from "./sectionHeader";
+import "@enterprise/lib/registrations/mcpClientAccessGrants";
 
 type DetailsTab = "overview" | "tools" | "callers" | "prompts" | "resources" | "access";
 type ToolFilter = "all" | "enabled" | "auto" | "off";
@@ -156,6 +158,10 @@ export default function MCPClientDetailsSheet({
 		return out;
 	}, [virtualMcpsData, config.client_id]);
 	const vkConfigs = mcpClient.vk_configs ?? [];
+	// Grants a downstream build adds beside keys and Virtual MCPs; none in the base build.
+	const accessGrants = getMCPClientAccessGrants();
+	const AccessGrantsSection = accessGrants?.Section;
+	const accessGrantCount = useMCPClientAccessGrantCount(config.client_id) ?? 0;
 
 	// Callers: per-user OAuth and per-user headers servers store a row per
 	// caller. One one-row page per status gives the counts; a short page gives
@@ -185,7 +191,16 @@ export default function MCPClientDetailsSheet({
 	const toolsStat = toolStat(mcpClient);
 	const stats = [
 		{ key: "tools", label: "Tools", ...toolsStat },
-		{ key: "access", label: "Access", ...accessStat(config, vkConfigs.length, memberVirtualMcps.length) },
+		{
+			key: "access",
+			label: "Access",
+			...accessStat(
+				config,
+				vkConfigs.length,
+				memberVirtualMcps.length,
+				accessGrants && { count: accessGrantCount, noun: accessGrants.noun },
+			),
+		},
 		...(hasCallers ? [{ key: "callers", label: "Callers", value: String(callers.total), sub: callers.sub }] : []),
 	];
 
@@ -336,7 +351,7 @@ export default function MCPClientDetailsSheet({
 									Resources <TabCount n={resourceItems.length} />
 								</TabsTrigger>
 								<TabsTrigger value="access" data-testid="mcpclient-view-tab-access">
-									Access <TabCount n={vkConfigs.length + memberVirtualMcps.length} />
+									Access <TabCount n={vkConfigs.length + accessGrantCount + memberVirtualMcps.length} />
 								</TabsTrigger>
 							</TabsList>
 						</div>
@@ -619,6 +634,8 @@ export default function MCPClientDetailsSheet({
 									</EmptyBox>
 								)}
 							</div>
+
+							{AccessGrantsSection && <AccessGrantsSection mcpClientId={config.client_id} active={tab === "access"} />}
 
 							<div className="space-y-3">
 								<SectionHeader

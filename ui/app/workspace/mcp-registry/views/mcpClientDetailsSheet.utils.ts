@@ -371,16 +371,37 @@ export function toolStat(client: Pick<MCPClient, "config" | "tools" | "state">):
 	return { value: `${enabled} of ${tools.length} enabled`, sub: auto > 0 ? `${auto} auto-execute` : "none auto-execute" };
 }
 
-/** accessStat is the Access figure at the top of the view: what reaches the server besides its own endpoint. */
-export function accessStat(config: MCPClientConfig, virtualKeys: number, virtualMcps: number): { value: string; sub: string } {
+/** MCPClientAccessGrantCount is a kind of grant a build adds to the Access figure, counted under its own noun. */
+export interface MCPClientAccessGrantCount {
+	count: number;
+	noun: { one: string; many: string };
+}
+
+/**
+ * accessStat is the Access figure at the top of the view: what reaches the
+ * server besides its own endpoint. Grants a build adds are counted beside the
+ * keys, which then read as "keys" to keep the figure short.
+ */
+export function accessStat(
+	config: MCPClientConfig,
+	virtualKeys: number,
+	virtualMcps: number,
+	grants?: MCPClientAccessGrantCount,
+): { value: string; sub: string } {
 	const keys = plural(virtualKeys, "virtual key", "virtual keys");
 	const vmcps = plural(virtualMcps, "Virtual MCP", "Virtual MCPs");
+	const granted = grants && grants.count > 0 ? plural(grants.count, grants.noun.one, grants.noun.many) : "";
 	if (config.allow_by_default) {
-		const extras = [virtualKeys > 0 ? keys : "", virtualMcps > 0 ? vmcps : ""].filter(Boolean);
-		return { value: "Allowed by default", sub: extras.length > 0 ? `and ${extras.join(" · ")}` : "no key overrides" };
+		const extras = [virtualKeys > 0 ? keys : "", granted, virtualMcps > 0 ? vmcps : ""].filter(Boolean);
+		const none = grants ? `no key or ${grants.noun.one} overrides` : "no key overrides";
+		return { value: "Allowed by default", sub: extras.length > 0 ? `and ${extras.join(" · ")}` : none };
+	}
+	let value = virtualKeys > 0 ? keys : "No access";
+	if (granted) {
+		value = virtualKeys > 0 ? `${plural(virtualKeys, "key", "keys")} · ${granted}` : granted;
 	}
 	return {
-		value: virtualKeys > 0 ? keys : "No access",
+		value,
 		sub: [virtualMcps > 0 ? `and ${vmcps}` : "", "not allowed by default"].filter(Boolean).join(" · "),
 	};
 }
