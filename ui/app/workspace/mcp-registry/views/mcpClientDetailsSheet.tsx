@@ -16,7 +16,7 @@ import { MCPSessionStatus } from "@/lib/types/mcpSessions";
 import { VirtualMCP } from "@/lib/types/virtualMcps";
 import { cn } from "@/lib/utils";
 import { formatRelativePast } from "@/lib/utils/mcpCredential";
-import { perUserDiscoveryOn, toolSubtitle } from "@/lib/utils/mcpPerUserDiscovery";
+import { perUserDiscoveryOn, sessionDiscoveryCell, toolSubtitle } from "@/lib/utils/mcpPerUserDiscovery";
 import { titleCaseFromSnakeCase } from "@/lib/utils/strings";
 import { Link } from "@tanstack/react-router";
 import { ArrowUpRight, Check, ChevronDown, ChevronRight, CircleAlert, Copy, Info } from "lucide-react";
@@ -479,13 +479,14 @@ export default function MCPClientDetailsSheet({
 											<TableRow>
 												<TableHead>Bound to</TableHead>
 												<TableHead className="w-36">Status</TableHead>
+												{perUserDiscovery && <TableHead>Discovery</TableHead>}
 												<TableHead className="w-36">Updated</TableHead>
 											</TableRow>
 										</TableHeader>
 										<TableBody>
 											{callerRows.length === 0 ? (
 												<TableRow className="hover:bg-transparent">
-													<TableCell colSpan={3} className="text-muted-foreground h-20 text-center">
+													<TableCell colSpan={perUserDiscovery ? 4 : 3} className="text-muted-foreground h-20 text-center">
 														{config.auth_type === "per_user_oauth" ? "No sessions yet." : "No submissions yet."}
 													</TableCell>
 												</TableRow>
@@ -494,6 +495,7 @@ export default function MCPClientDetailsSheet({
 													const binding = bindingLabel(row);
 													const updated =
 														(config.auth_type === "per_user_oauth" ? row.last_refreshed_at : row.updated_at) || row.created_at;
+													const discovery = perUserDiscovery ? sessionDiscoveryCell(row) : null;
 													return (
 														<TableRow key={`${row.kind}-${row.id}`} data-testid={`mcpclient-view-caller-${row.id}`}>
 															<TableCell>
@@ -505,6 +507,12 @@ export default function MCPClientDetailsSheet({
 																	{SESSION_STATUS_LABELS[row.status] ?? titleCaseFromSnakeCase(row.status)}
 																</Badge>
 															</TableCell>
+															{discovery && (
+																<TableCell data-testid={`mcpclient-view-caller-discovery-${row.id}`}>
+																	<div className={cn(discovery.muted && "text-muted-foreground")}>{discovery.text}</div>
+																	{discovery.sub && <div className="text-muted-foreground text-xs">{discovery.sub}</div>}
+																</TableCell>
+															)}
 															<TableCell className="text-muted-foreground">{updated ? formatRelativePast(updated) : "-"}</TableCell>
 														</TableRow>
 													);

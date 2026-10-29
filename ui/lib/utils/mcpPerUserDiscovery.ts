@@ -3,6 +3,8 @@
 // pickers that list a server's tools.
 
 import type { MCPAuthType, MCPClient, MCPClientConfig, MCPConnectionType } from "@/lib/types/mcp";
+import type { MCPSessionRow } from "@/lib/types/mcpSessions";
+import { formatRelativePast } from "@/lib/utils/mcpCredential";
 
 const PER_USER_AUTH_TYPES: ReadonlySet<MCPAuthType> = new Set(["per_user_oauth", "per_user_headers", "token_exchange"]);
 
@@ -37,4 +39,46 @@ export function toolSubtitle(
 		return "Not seen in any caller's discovery yet";
 	}
 	return `Discovered by ${callers} ${callers === 1 ? "caller" : "callers"}`;
+}
+
+/** SessionDiscoveryCell is the Discovery column's text for one session row. */
+export interface SessionDiscoveryCell {
+	text: string;
+	sub?: string;
+	muted: boolean;
+}
+
+const countOf = (n: number, one: string, many: string) => `${n} ${n === 1 ? one : many}`;
+
+/**
+ * sessionDiscoveryCell describes what a session row's binding holds on its
+ * server. A server without per_user_discovery keeps one discovery every
+ * caller shares. On one with it, a held discovery shows its counts whatever
+ * the credential's status; otherwise a session-bound caller keeps none, a
+ * pending sign-in has no credential yet, an active credential gets one on the
+ * caller's next connect, and one that needs action had it deleted with it.
+ */
+export function sessionDiscoveryCell(
+	row: Pick<MCPSessionRow, "kind" | "auth_mode" | "status" | "mcp_client" | "discovery">,
+): SessionDiscoveryCell {
+	if (!row.mcp_client?.per_user_discovery) {
+		return { text: "Shared", muted: true };
+	}
+	const discovery = row.discovery;
+	if (discovery) {
+		const parts = [discovery.tool_count === 0 ? "No tools" : countOf(discovery.tool_count, "tool", "tools")];
+		if (discovery.prompt_count > 0) parts.push(countOf(discovery.prompt_count, "prompt", "prompts"));
+		if (discovery.resource_count > 0) parts.push(countOf(discovery.resource_count, "resource", "resources"));
+		return { text: parts.join(" · "), sub: `discovered ${formatRelativePast(discovery.discovered_at)}`, muted: false };
+	}
+	if (row.auth_mode === "session") {
+		return { text: "-", muted: true };
+	}
+	if (row.kind === "flow") {
+		return { text: "Not yet", muted: true };
+	}
+	if (row.status === "active") {
+		return { text: "Not yet", sub: "on the next connect", muted: true };
+	}
+	return { text: "-", muted: true };
 }

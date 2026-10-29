@@ -42,6 +42,7 @@ import { useToast } from "@/hooks/use-toast";
 import { getErrorMessage, useReauthMCPSessionMutation, useRevokeMCPSessionMutation } from "@/lib/store";
 import { MCPSessionRow } from "@/lib/types/mcpSessions";
 import { formatRelativePast, formatTokenExpiry } from "@/lib/utils/mcpCredential";
+import { sessionDiscoveryCell } from "@/lib/utils/mcpPerUserDiscovery";
 import { RefreshTokenStatus } from "@/components/refreshTokenStatus";
 import { ScopeChips } from "@/components/scopeChips";
 import { ExternalLink, Fingerprint, KeyRound, Loader2, MoreHorizontal, Pencil, RefreshCcw, Trash2, UserRound } from "lucide-react";
@@ -200,6 +201,12 @@ export default function SessionsTable({
 										tooltip="Whether the provider issued a refresh token. Present: Bifrost renews the access token automatically at use time. Not issued: the row must be re-authenticated once the access token expires. Rejected upstream: the provider refused the last refresh, so the row needs re-auth. Header rows and pending sign-ins have no token."
 									/>
 								</TableHead>
+								<TableHead>
+									<HeaderWithTooltip
+										label="Discovery"
+										tooltip="What Bifrost discovered with this credential on a server with Per-Caller Discovery on: its tools, prompts and resources, and when. Not yet: the caller has not connected since signing in, or discovery failed; it runs on their next connect. Shared: the server keeps one discovery that every caller uses. A dash: the credential needs action first, or it is session-bound."
+									/>
+								</TableHead>
 								<TableHead>Created</TableHead>
 								<TableHead className={`bg-muted sticky right-0 z-10 w-[56px] text-right ${PIN_SHADOW_RIGHT}`}></TableHead>
 							</TableRow>
@@ -207,7 +214,7 @@ export default function SessionsTable({
 						<TableBody>
 							{sessions.length === 0 ? (
 								<TableRow>
-									<TableCell colSpan={9} className="h-24 text-center">
+									<TableCell colSpan={10} className="h-24 text-center">
 										{hasActiveFilters ? (
 											<div className="text-muted-foreground text-sm">No sessions match these filters.</div>
 										) : (
@@ -242,6 +249,9 @@ export default function SessionsTable({
 										</TableCell>
 										<TableCell className="text-sm">
 											<RefreshTokenCell row={row} />
+										</TableCell>
+										<TableCell className="text-sm">
+											<DiscoveryCell row={row} />
 										</TableCell>
 										<TableCell className="text-muted-foreground text-sm">{formatRelativePast(row.created_at)}</TableCell>
 										<TableCell
@@ -367,6 +377,18 @@ function RefreshTokenCell({ row }: { row: MCPSessionRow }) {
 		return <span className="text-muted-foreground text-sm">-</span>;
 	}
 	return <RefreshTokenStatus hasRefreshToken={row.has_refresh_token} status={row.status} />;
+}
+
+// What the row's binding holds on its server: counts and when for a held
+// discovery, else why it holds none (see sessionDiscoveryCell).
+function DiscoveryCell({ row }: { row: MCPSessionRow }) {
+	const cell = sessionDiscoveryCell(row);
+	return (
+		<div className="flex flex-col" data-testid={`mcp-session-discovery-${row.id}`}>
+			<span className={cell.muted ? "text-muted-foreground" : undefined}>{cell.text}</span>
+			{cell.sub && <span className="text-muted-foreground text-xs">{cell.sub}</span>}
+		</div>
+	);
 }
 
 function TypeBadge({ authKind }: { authKind: string }) {
