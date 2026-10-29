@@ -559,6 +559,7 @@ func (p *RoutingPlugin) applyRoutingRules(ctx *schemas.BifrostContext, req *sche
 			resolvedFallbacks = append(resolvedFallbacks, resolved)
 		}
 		req.SetFallbacks(resolvedFallbacks)
+		p.warnFallbacksOutsideAccess(ctx, decision.MatchedRuleName, resolvedFallbacks)
 	}
 
 	// Pin specific API key by ID if the routing rule specifies one. This uses a dedicated,

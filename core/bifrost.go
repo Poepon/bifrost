@@ -6146,6 +6146,8 @@ func (bifrost *Bifrost) handleRequest(ctx *schemas.BifrostContext, req *schemas.
 	// the error that triggered it (primary error for the first iteration, the
 	// prior fallback's error for subsequent iterations).
 	lastErr := primaryErr
+	// What became of each fallback, for the primary's error should the whole chain fail.
+	var fallbackAttempts []schemas.FallbackAttempt
 
 	// Try fallbacks in order
 	for i, fallback := range fallbacks {
@@ -6173,6 +6175,7 @@ func (bifrost *Bifrost) handleRequest(ctx *schemas.BifrostContext, req *schemas.
 		if fallbackReq == nil {
 			bifrost.logger.Debug("fallback provider %s with model %s is nil", fallback.Provider, fallback.Model)
 			ctx.AppendRoutingEngineLog(schemas.RoutingEngineCore, schemas.LogLevelWarn, fmt.Sprintf("Fallback %s/%s skipped: missing provider config or unsupported request type", fallback.Provider, fallback.Model))
+			fallbackAttempts = append(fallbackAttempts, fallbackAttemptOf(fallback, nil))
 			tracer.SetAttribute(handle, "error", "fallback request preparation failed")
 			tracer.EndSpan(handle, schemas.SpanStatusError, "fallback request preparation failed")
 			continue
@@ -6207,11 +6210,15 @@ func (bifrost *Bifrost) handleRequest(ctx *schemas.BifrostContext, req *schemas.
 		}
 
 		lastErr = fallbackErr
+		fallbackAttempts = append(fallbackAttempts, fallbackAttemptOf(fallback, fallbackErr))
 	}
 
 	ctx.AppendRoutingEngineLog(schemas.RoutingEngineCore, schemas.LogLevelError, fmt.Sprintf("All %d fallback(s) exhausted; returning primary error (%s)", len(fallbacks), routingErrorSummary(primaryErr)))
 	// All providers failed, return the original error, with the provider headers it came with
 	restoreProviderResponseHeaders(ctx, primaryHeaders)
+	// The caller sees only the primary's error, so it carries the fallbacks' outcomes: one refused
+	// before reaching its provider would otherwise look like a fallback that never ran (#3261).
+	primaryErr.ExtraFields.FallbackAttempts = fallbackAttempts
 	return nil, primaryErr
 }
 
@@ -6365,6 +6372,8 @@ func (bifrost *Bifrost) handleStreamRequest(ctx *schemas.BifrostContext, req *sc
 	ctx.AppendRoutingEngineLog(schemas.RoutingEngineCore, schemas.LogLevelInfo, fmt.Sprintf("Primary %s/%s failed (%s); evaluating %d configured fallback(s)", provider, model, routingErrorSummary(primaryErr), len(fallbacks)))
 
 	lastErr := primaryErr
+	// What became of each fallback, for the primary's error should the whole chain fail.
+	var fallbackAttempts []schemas.FallbackAttempt
 
 	// Try fallbacks in order
 	for i, fallback := range fallbacks {
@@ -6390,6 +6399,7 @@ func (bifrost *Bifrost) handleStreamRequest(ctx *schemas.BifrostContext, req *sc
 		fallbackReq := bifrost.prepareFallbackRequest(req, fallback)
 		if fallbackReq == nil {
 			ctx.AppendRoutingEngineLog(schemas.RoutingEngineCore, schemas.LogLevelWarn, fmt.Sprintf("Fallback %s/%s skipped: missing provider config or unsupported request type", fallback.Provider, fallback.Model))
+			fallbackAttempts = append(fallbackAttempts, fallbackAttemptOf(fallback, nil))
 			tracer.SetAttribute(handle, "error", "fallback request preparation failed")
 			tracer.EndSpan(handle, schemas.SpanStatusError, "fallback request preparation failed")
 			continue
@@ -6440,11 +6450,15 @@ func (bifrost *Bifrost) handleStreamRequest(ctx *schemas.BifrostContext, req *sc
 		}
 
 		lastErr = fallbackErr
+		fallbackAttempts = append(fallbackAttempts, fallbackAttemptOf(fallback, fallbackErr))
 	}
 
 	ctx.AppendRoutingEngineLog(schemas.RoutingEngineCore, schemas.LogLevelError, fmt.Sprintf("All %d fallback(s) exhausted; returning primary error (%s)", len(fallbacks), routingErrorSummary(primaryErr)))
 	// All providers failed, return the original error, with the provider headers it came with
 	restoreProviderResponseHeaders(ctx, primaryHeaders)
+	// The caller sees only the primary's error, so it carries the fallbacks' outcomes: one refused
+	// before reaching its provider would otherwise look like a fallback that never ran (#3261).
+	primaryErr.ExtraFields.FallbackAttempts = fallbackAttempts
 	return nil, primaryErr
 }
 
