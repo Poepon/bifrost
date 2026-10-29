@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"reflect"
 	"sort"
 	"strconv"
 	"strings"
@@ -44,22 +45,21 @@ var ErrRawResponseTextUnsupported = errors.New("raw response text synchronizatio
 // events (stop reason, usage) have no text field, so text released onto a closing chunk cannot be mirrored
 // into that chunk's raw payload and has to be placed on an earlier text chunk instead.
 func (format RawResponseFormat) TextOnlyInDeltaEvents() bool {
-	return rawTextLayouts[format].deltaOnly
+	return rawTextFormats[format].deltaOnly
 }
 
 // rawPayloadKind is a normalized stream chunk type a raw format can back.
 type rawPayloadKind uint8
 
 const (
-	rawPayloadChat rawPayloadKind = 1 << iota
+	rawPayloadChat rawPayloadKind = iota + 1
 	rawPayloadText
 	rawPayloadResponses
 )
 
-// rawTextLayout describes where one declared format keeps the text of a normalized stream chunk.
+// rawTextLayout describes where one declared format keeps the text of one normalized payload type. The zero value
+// is a format whose frames use the normalized JSON paths themselves.
 type rawTextLayout struct {
-	// payloads are the normalized chunk types this format's raw payload can back.
-	payloads rawPayloadKind
 	// carries reports whether this format's events can hold the normalized field at path at all. Edits to
 	// other fields, such as accumulated Responses text on a provider whose events only stream deltas, have no
 	// raw counterpart and are left out. nil means every field.
@@ -68,30 +68,47 @@ type rawTextLayout struct {
 	// means the frame has no place for it, and such a field is never created. nil means the normalized path
 	// itself, or the text blocks of a content array found there.
 	slots func(frame []byte, path []string) []string
-	// deltaOnly marks formats whose closing events carry no text (see TextOnlyInDeltaEvents).
+	// objects returns the raw paths in one frame that hold tool-call arguments as JSON objects rather than text;
+	// an arguments edit replaces the object equal to its original value. nil means arguments are text.
+	objects func(frame []byte) []string
+}
+
+// rawTextFormat describes one declared format: a layout for each normalized payload type its raw payload can back,
+// and whether its closing events carry text (see TextOnlyInDeltaEvents).
+type rawTextFormat struct {
+	layouts   map[rawPayloadKind]rawTextLayout
 	deltaOnly bool
 }
 
-// rawTextLayouts lists every format SyncRawResponseText understands.
-var rawTextLayouts = map[RawResponseFormat]rawTextLayout{
-	RawResponseFormatOpenAIChatCompletionChunk:  {payloads: rawPayloadChat},
-	RawResponseFormatOpenAITextCompletionChunk:  {payloads: rawPayloadText},
-	RawResponseFormatOpenAIResponsesStreamEvent: {payloads: rawPayloadResponses},
-	RawResponseFormatAnthropicMessagesStreamEvent: {
-		payloads: rawPayloadChat | rawPayloadResponses, carries: isStreamedTextPath, slots: anthropicTextSlots, deltaOnly: true,
-	},
-	RawResponseFormatBedrockConverseStreamEvent: {
-		payloads: rawPayloadChat | rawPayloadResponses, carries: isStreamedTextPath, slots: bedrockTextSlots, deltaOnly: true,
-	},
-	RawResponseFormatCohereChatStreamEvent: {
-		payloads: rawPayloadChat | rawPayloadResponses, carries: isStreamedTextPath, slots: cohereTextSlots, deltaOnly: true,
-	},
-	RawResponseFormatGeminiStreamChunk: {
-		payloads: rawPayloadChat | rawPayloadResponses, carries: isStreamedTextPath, slots: geminiTextSlots,
-	},
-	RawResponseFormatReplicateStreamEvent: {
-		payloads: rawPayloadChat | rawPayloadText, carries: isStreamedTextPath, slots: replicateTextSlots, deltaOnly: true,
-	},
+// rawTextFormats lists every format SyncRawResponseText understands.
+var rawTextFormats = map[RawResponseFormat]rawTextFormat{
+	// Chat frames also back Text chunks (text served through chat) and Responses events (Responses served through
+	// chat), whose streamed text sits in the frame's delta.
+	RawResponseFormatOpenAIChatCompletionChunk: {layouts: map[rawPayloadKind]rawTextLayout{
+		rawPayloadChat:      {},
+		rawPayloadText:      {carries: isStreamedTextPath, slots: chatFrameTextSlots},
+		rawPayloadResponses: {carries: isStreamedTextPath, slots: chatFrameTextSlots},
+	}},
+	RawResponseFormatOpenAITextCompletionChunk: {layouts: map[rawPayloadKind]rawTextLayout{rawPayloadText: {}}},
+	// Responses events also back Chat chunks (chat served through Responses).
+	RawResponseFormatOpenAIResponsesStreamEvent: {layouts: map[rawPayloadKind]rawTextLayout{
+		rawPayloadResponses: {},
+		rawPayloadChat:      {carries: isStreamedTextPath, slots: responsesEventTextSlots},
+	}},
+	RawResponseFormatAnthropicMessagesStreamEvent: eventFormat(rawTextLayout{carries: isStreamedTextPath, slots: anthropicTextSlots}, true),
+	RawResponseFormatBedrockConverseStreamEvent:   eventFormat(rawTextLayout{carries: isStreamedTextPath, slots: bedrockTextSlots}, true),
+	RawResponseFormatCohereChatStreamEvent:        eventFormat(rawTextLayout{carries: isStreamedTextPath, slots: cohereTextSlots}, true),
+	RawResponseFormatGeminiStreamChunk:            eventFormat(rawTextLayout{carries: isStreamedTextPath, slots: geminiTextSlots, objects: geminiArgumentObjects}, false),
+	RawResponseFormatReplicateStreamEvent:         eventFormat(rawTextLayout{carries: isStreamedTextPath, slots: replicateTextSlots}, true),
+}
+
+// eventFormat is a provider event format whose one layout serves every payload type, since the same provider events
+// back Chat, Text, and Responses chunks.
+func eventFormat(layout rawTextLayout, deltaOnly bool) rawTextFormat {
+	return rawTextFormat{
+		layouts:   map[rawPayloadKind]rawTextLayout{rawPayloadChat: layout, rawPayloadText: layout, rawPayloadResponses: layout},
+		deltaOnly: deltaOnly,
+	}
 }
 
 // rawTextEdit is one normalized string field whose value a plugin changed. path holds escaped
@@ -114,13 +131,14 @@ type rawJSONFrames struct {
 // (before → after) to the chunk's provider-native raw payload, so both copies carry the same text.
 //
 // before and after must be a normalized type the format can back: *BifrostChatResponse,
-// *BifrostTextCompletionResponse, or *BifrostResponsesStreamResponse. The OpenAI formats use the same JSON field
-// paths as the normalized payload. Other formats map streamed text (Chat content and tool-argument deltas,
-// text-completion choices, Responses event deltas) to the field their provider event keeps it in, and leave out
-// accumulated text their events never carry. Each changed field is rewritten after verifying its original value
-// in the raw payload. Text spread over several raw fields moves to the last of them; text added where the
-// normalized payload had none goes into an existing empty field, or, for the OpenAI formats, into the last frame
-// whose parent object exists. Every other raw byte is preserved.
+// *BifrostTextCompletionResponse, or *BifrostResponsesStreamResponse. A payload of the type the format natively
+// describes uses the same JSON field paths as the raw payload. Otherwise, and for provider event formats, streamed
+// text (Chat content and tool-argument deltas, text-completion choices, Responses event deltas) maps to the field
+// the raw event keeps it in, accumulated text the events never carry is left out, and tool arguments a format keeps
+// as JSON objects replace the object equal to their original value. Each changed field is rewritten after verifying
+// its original value in the raw payload. Text spread over several raw fields moves to the last of them; text added
+// where the normalized payload had none goes into an existing empty field, or, for a natively described payload,
+// into the last frame whose parent object exists. Every other raw byte is preserved.
 //
 // It returns an error wrapping ErrRawResponseTextUnsupported when the format, payload type, or raw field
 // shape is not handled, and a plain error when the raw text does not match the normalized original.
@@ -151,9 +169,12 @@ func SyncRawResponseText(raw any, format RawResponseFormat, before, after any) (
 
 // rawTextLayoutFor returns a format's layout when before/after are the same non-nil normalized type it can back.
 func rawTextLayoutFor(format RawResponseFormat, before, after any) (rawTextLayout, bool) {
-	layout, known := rawTextLayouts[format]
 	kind := rawPayloadKindOf(before)
-	return layout, known && kind != 0 && kind == rawPayloadKindOf(after) && layout.payloads&kind != 0
+	if kind == 0 || kind != rawPayloadKindOf(after) {
+		return rawTextLayout{}, false
+	}
+	layout, ok := rawTextFormats[format].layouts[kind]
+	return layout, ok
 }
 
 // rawPayloadKindOf classifies a normalized stream chunk; nil pointers and other types are not payloads.
@@ -318,6 +339,9 @@ func splitRawJSONFrames(raw string) (*rawJSONFrames, error) {
 
 // apply rewrites one normalized string change into the frames after verifying the raw text it replaces.
 func (f *rawJSONFrames) apply(edit rawTextEdit, layout rawTextLayout) error {
+	if layout.objects != nil && isArgumentsPath(edit.path) {
+		return f.applyObjects(edit, layout.objects)
+	}
 	if layout.carries != nil && !layout.carries(edit.path) {
 		return nil
 	}
@@ -403,6 +427,51 @@ func (f *rawJSONFrames) apply(edit rawTextEdit, layout rawTextLayout) error {
 	return fmt.Errorf("raw payload has no object that can carry field %q", path)
 }
 
+// applyObjects replaces the raw tool-argument object equal to an arguments edit's original value with the edited
+// arguments. Arguments the frames do not hold are left out, like other text a provider event does not carry; a
+// partial fragment cannot be matched against whole objects, so it is unsupported wherever objects exist.
+func (f *rawJSONFrames) applyObjects(edit rawTextEdit, objects func(frame []byte) []string) error {
+	path := rawJSONPath(edit.path)
+	if edit.before == "" {
+		if edit.after == "" {
+			return nil
+		}
+		return fmt.Errorf("%w: raw arguments objects cannot take arguments added to %q", ErrRawResponseTextUnsupported, path)
+	}
+	var original any
+	if err := json.Unmarshal([]byte(edit.before), &original); err != nil {
+		for _, frame := range f.frames {
+			if len(objects(frame)) > 0 {
+				return fmt.Errorf("%w: partial arguments for %q cannot be matched to raw arguments objects", ErrRawResponseTextUnsupported, path)
+			}
+		}
+		return nil
+	}
+	if !json.Valid([]byte(edit.after)) {
+		return fmt.Errorf("%w: edited arguments for %q are not a JSON value", ErrRawResponseTextUnsupported, path)
+	}
+	for index := range f.frames {
+		for _, slot := range objects(f.frames[index]) {
+			var value any
+			if err := json.Unmarshal([]byte(gjson.GetBytes(f.frames[index], slot).Raw), &value); err != nil || !reflect.DeepEqual(value, original) {
+				continue
+			}
+			updated, err := sjson.SetRawBytes(f.frames[index], slot, []byte(edit.after))
+			if err != nil {
+				return fmt.Errorf("rewrite raw arguments %q: %w", slot, err)
+			}
+			f.frames[index] = updated
+		}
+	}
+	return nil
+}
+
+// isArgumentsPath reports whether a normalized path holds a tool call's arguments: a Chat tool-call delta, or a
+// Responses function call's accumulated arguments (on its done event, its output item, or the completed response).
+func isArgumentsPath(path []string) bool {
+	return len(path) > 0 && path[len(path)-1] == "arguments"
+}
+
 // sameShapeTextSlots returns the normalized path itself, or the text blocks of a content array found there:
 // some OpenAI-compatible providers stream content as typed blocks that the normalized payload joins into one
 // string.
@@ -445,6 +514,37 @@ func isToolArgumentsPath(path []string) bool {
 		path[5] == "function" && path[6] == "arguments"
 }
 
+// chatFrameTextSlots maps the streamed text of a Text chunk or a Responses event served through chat to the chat
+// frames carrying it: the choice's delta content (or its text blocks), and for a Responses delta also the tool-call
+// arguments, since an arguments delta comes from those.
+func chatFrameTextSlots(frame []byte, path []string) []string {
+	switch {
+	case len(path) == 3 && path[0] == "choices" && path[2] == "text":
+		return sameShapeTextSlots(frame, []string{"choices", path[1], "delta", "content"})
+	case len(path) == 1 && path[0] == "delta":
+		slots := sameShapeTextSlots(frame, []string{"choices", "0", "delta", "content"})
+		index := 0
+		gjson.GetBytes(frame, "choices.0.delta.tool_calls").ForEach(func(_, _ gjson.Result) bool {
+			slots = append(slots, "choices.0.delta.tool_calls."+strconv.Itoa(index)+".function.arguments")
+			index++
+			return true
+		})
+		return slots
+	}
+	return nil
+}
+
+// responsesEventTextSlots maps a Chat chunk served through Responses to the Responses delta event backing it: answer
+// content to an output_text.delta, tool-call arguments to a function_call_arguments.delta.
+func responsesEventTextSlots(frame []byte, path []string) []string {
+	switch eventType := gjson.GetBytes(frame, "type").String(); {
+	case len(path) == 4 && path[3] == "content" && eventType == "response.output_text.delta",
+		isToolArgumentsPath(path) && eventType == "response.function_call_arguments.delta":
+		return []string{"delta"}
+	}
+	return nil
+}
+
 // anthropicTextSlots maps streamed text to an Anthropic content_block_delta: text_delta text, or input_json_delta
 // partial JSON for tool arguments and tool-backed structured output. Thinking, signatures, and lifecycle events
 // (message_start, content_block_stop, message_delta, ...) hold no mirrored text.
@@ -475,14 +575,18 @@ func bedrockTextSlots(frame []byte, path []string) []string {
 	return nil
 }
 
-// cohereTextSlots maps streamed text to a Cohere v2 chat event: content-delta text, or tool-call arguments.
-// Thinking and tool plans are reasoning and hold no mirrored text.
+// cohereTextSlots maps streamed text to a Cohere v2 chat event: content-delta text, tool-call arguments, or the tool
+// plan a Responses stream shows as text. Thinking holds no mirrored text.
 func cohereTextSlots(frame []byte, path []string) []string {
 	if !isToolArgumentsPath(path) && gjson.GetBytes(frame, "delta.message.content.text").Exists() {
 		return []string{"delta.message.content.text"}
 	}
 	if (isToolArgumentsPath(path) || len(path) == 1) && gjson.GetBytes(frame, "delta.message.tool_calls.function.arguments").Exists() {
 		return []string{"delta.message.tool_calls.function.arguments"}
+	}
+	// A Responses stream shows the tool plan as answer text; Chat keeps it as reasoning.
+	if len(path) == 1 && gjson.GetBytes(frame, "delta.message.tool_plan").Exists() {
+		return []string{"delta.message.tool_plan"}
 	}
 	return nil
 }
@@ -493,7 +597,7 @@ func cohereTextSlots(frame []byte, path []string) []string {
 func geminiTextSlots(frame []byte, path []string) []string {
 	candidate := "0"
 	switch {
-	case len(path) == 4 && path[3] == "content":
+	case len(path) == 4 && path[3] == "content", len(path) == 3 && path[2] == "text":
 		candidate = path[1]
 	case len(path) == 1:
 	default:
@@ -517,6 +621,26 @@ func geminiTextSlots(frame []byte, path []string) []string {
 	if !mirrorable {
 		return nil
 	}
+	return slots
+}
+
+// geminiArgumentObjects returns the functionCall args of every Gemini candidate part: Gemini keeps tool-call
+// arguments as JSON objects, which the normalized payload carries as their JSON text.
+func geminiArgumentObjects(frame []byte) []string {
+	var slots []string
+	candidateIndex := 0
+	gjson.GetBytes(frame, "candidates").ForEach(func(_, candidate gjson.Result) bool {
+		partIndex := 0
+		candidate.Get("content.parts").ForEach(func(_, part gjson.Result) bool {
+			if part.Get("functionCall.args").Exists() {
+				slots = append(slots, "candidates."+strconv.Itoa(candidateIndex)+".content.parts."+strconv.Itoa(partIndex)+".functionCall.args")
+			}
+			partIndex++
+			return true
+		})
+		candidateIndex++
+		return true
+	})
 	return slots
 }
 
