@@ -1,9 +1,10 @@
 import { FormControl, FormField, FormItem, FormLabel, FormMessage } from "@/components/ui/form";
 import { Input } from "@/components/ui/input";
 import { SecretVarInput } from "@/components/ui/secretVarInput";
+import { Switch } from "@/components/ui/switch";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 import { Info } from "lucide-react";
-import type { Control } from "react-hook-form";
+import { type Control, useWatch } from "react-hook-form";
 import { useTranslation } from "react-i18next";
 
 interface OAuthAdvancedFieldsProps {
@@ -45,6 +46,9 @@ interface OAuthAdvancedFieldsProps {
 	registrationUrlLabel: React.ReactNode;
 	registrationUrlTestId: string;
 
+	/** Shows the "Use Bifrost's client metadata document" toggle (create form only); it disables the client ID and secret. */
+	clientMetadataDocumentTestId?: string;
+
 	/** Called after a URL/client-id field changes, e.g. so the create form can clear a submit-time error for that field. */
 	onFieldTouched?: (field: "authorize_url" | "token_url" | "registration_url") => void;
 }
@@ -76,12 +80,38 @@ export function OAuthAdvancedFields({
 	tokenUrlTestId,
 	registrationUrlLabel,
 	registrationUrlTestId,
+	clientMetadataDocumentTestId,
 	onFieldTouched,
 }: OAuthAdvancedFieldsProps) {
 	const { t } = useTranslation("mcp");
+	const useClientMetadataDocument = useWatch({ control, name: "oauth_config.use_client_metadata_document" }) === true;
+	const credentialsDisabled = disabled || (clientMetadataDocumentTestId !== undefined && useClientMetadataDocument);
 	return (
 		<>
 			{beforeFields}
+			{clientMetadataDocumentTestId && (
+				<FormField
+					control={control}
+					name="oauth_config.use_client_metadata_document"
+					render={({ field }) => (
+						<FormItem className="flex flex-row items-center justify-between gap-4 rounded-md border px-4 py-3">
+							<div className="flex flex-col gap-1">
+								<FormLabel htmlFor="use-client-metadata-document">{t("registry.oauthFields.clientMetadataDocumentLabel")}</FormLabel>
+								<p className="text-muted-foreground text-xs">{t("registry.oauthFields.clientMetadataDocumentDesc")}</p>
+							</div>
+							<FormControl>
+								<Switch
+									id="use-client-metadata-document"
+									data-testid={clientMetadataDocumentTestId}
+									checked={field.value === true}
+									onCheckedChange={field.onChange}
+									disabled={disabled}
+								/>
+							</FormControl>
+						</FormItem>
+					)}
+				/>
+			)}
 			<div className="grid grid-cols-1 gap-4 md:grid-cols-2">
 				<FormField
 					control={control}
@@ -105,7 +135,7 @@ export function OAuthAdvancedFields({
 								<SecretVarInput
 									data-testid={clientIdTestId}
 									placeholder={clientIdPlaceholder}
-									disabled={disabled}
+									disabled={credentialsDisabled}
 									maskNonEnvValue
 									value={field.value}
 									onChange={field.onChange}
@@ -126,7 +156,7 @@ export function OAuthAdvancedFields({
 								<SecretVarInput
 									data-testid={clientSecretTestId}
 									placeholder={clientSecretPlaceholder}
-									disabled={disabled}
+									disabled={credentialsDisabled}
 									hideValueWhenEnv
 									maskNonEnvValue
 									value={field.value}

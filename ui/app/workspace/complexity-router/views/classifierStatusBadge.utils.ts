@@ -1,5 +1,5 @@
 import i18n from "@/lib/i18n";
-import type { SemanticStatusInfo } from "@/lib/types/complexityRouter";
+import type { SemanticFallback, SemanticStatusInfo } from "@/lib/types/complexityRouter";
 
 function complexityT(key: string) {
 	return i18n.t(`routing.complexityUi.${key}`, { ns: "models" });
@@ -24,6 +24,14 @@ export function semanticWarmupFailureMessage(status: SemanticStatusInfo): string
 	return complexityT("failureUnknown");
 }
 
-export function semanticWarmupImpactMessage(status: SemanticStatusInfo): string {
-	return complexityT(status.serving_previous ? "impactServingPrevious" : "impactPaused");
+// Rules only pause when nothing else can name a tier: a saved llm or decision
+// fallback is tried on every request while semantic warmup is failing, though
+// it can itself fail or name no tier.
+export function semanticWarmupImpactMessage(status: SemanticStatusInfo, fallback: SemanticFallback): string {
+	if (status.serving_previous) return complexityT("impactServingPrevious");
+	if (fallback !== "none") {
+		const classifier = complexityT(fallback === "llm" ? "fallbackClassifierLlm" : "fallbackClassifierDecision");
+		return i18n.t("routing.complexityUi.impactFallback", { ns: "models", classifier });
+	}
+	return complexityT("impactPaused");
 }

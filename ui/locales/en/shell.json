@@ -9,6 +9,8 @@
 		"llmLogs": "LLM Logs",
 		"mcpLogs": "MCP Logs",
 		"connectors": "Connectors",
+		"relayLogs": "Relay Logs",
+		"relays": "Relays",
 		"logsSettings": "Logs Settings",
 		"models": "Models",
 		"modelCatalog": "Model Catalog",
@@ -83,6 +85,8 @@
 		"skillsSettings": "Skills Settings"
 	},
 	"navDesc": {
+		"relayLogs": "Relay calls and their cost",
+		"relays": "Relay non-LLM APIs with per-route pricing",
 		"home": "Your usage, keys, budgets and access",
 		"observability": "Request logs & monitoring",
 		"dashboard": "Dashboard",
@@ -212,6 +216,8 @@
 		"accountMenu": "Account menu",
 		"openMenu": "Open menu",
 		"signOut": "Sign out",
+		"viewAsUser": "View as user",
+		"closeView": "Close view",
 		"version": "Version",
 		"userFallback": "User",
 		"discord": "Discord Server",

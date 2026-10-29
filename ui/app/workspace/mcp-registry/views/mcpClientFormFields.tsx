@@ -21,8 +21,17 @@ import {
 	MCPTLSConfig,
 	SecretVar,
 } from "@/lib/types/mcp";
-import { mcpOpenAPIConfigSchema } from "@/lib/types/schemas";
+import {
+	hasPrivateKeySettingsWithoutKey,
+	hasSendMethodWithoutSecret,
+	isHTTPSOrLoopbackURL,
+	isSecretVarSet,
+	mcpOpenAPIConfigSchema,
+	PRIVATE_KEY_REQUIRED_MESSAGE,
+	SECRET_REQUIRED_FOR_METHOD_MESSAGE,
+} from "@/lib/types/schemas";
 import { parseArrayFromText } from "@/lib/utils/array";
+import { buildOAuthConfigPayload } from "./mcpClientOAuthPayload";
 import { RbacOperation, RbacResource, useRbac } from "@enterprise/lib";
 import { useGetSCIMProvidersQuery } from "@enterprise/lib/store/apis/scimApi";
 import { Info } from "lucide-react";
@@ -41,12 +50,13 @@ import {
 	type OpenAPICredentialField,
 	type OpenAPISourceMode,
 } from "./mcpClientOpenApiUtils";
+import { MaxProtocolVersionSelect } from "./maxProtocolVersionSelect";
 import { OAuthAdvancedFields } from "./oauthAdvancedFields";
 import { OpenAPIPreviewPanel, type OpenAPIBaseUrlChoice } from "./openApiPreviewPanel";
 import { OpenAPISpecSource } from "./openApiSpecSource";
 import { SectionHeader } from "./sectionHeader";
 import { TLSConfigFields } from "./tlsConfigFields";
-import { TokenExchangeFields } from "./tokenExchangeFields";
+import { exchangesAsSSOApplication, TokenExchangeFields, tokenExchangeProfilePayload } from "./tokenExchangeFields";
 
 /**
  * Shared configuration body for creating an MCP client. Rendered identically by
@@ -357,10 +367,44 @@ export function validateMCPClientForm({
 			setError("token_exchange.audience", { message: i18n.t("registry.form.audienceRequired", { ns: "mcp" }) });
 			hasErrors = true;
 		}
-		if (!data.token_exchange?.use_idp_credentials) {
+		if (!data.token_exchange?.use_idp_credentials && data.token_exchange?.profile !== "id_jag") {
 			const exchangeClientId = data.token_exchange?.client_id;
 			if (!exchangeClientId?.value && !exchangeClientId?.ref) {
 				setError("token_exchange.client_id", { message: i18n.t("registry.form.exchangeClientIdRequired", { ns: "mcp" }) });
+				hasErrors = true;
+			}
+		}
+		if (data.token_exchange?.profile === "id_jag") {
+			if (!isSecretVarSet(data.token_exchange?.resource_client_id)) {
+				setError("token_exchange.resource_client_id", { message: i18n.t("registry.form.resourceClientIdRequired", { ns: "mcp" }) });
+				hasErrors = true;
+			}
+			if (isSecretVarSet(data.token_exchange?.resource_client_secret) && isSecretVarSet(data.token_exchange?.resource_private_key)) {
+				setError("token_exchange.resource_private_key", {
+					message: i18n.t("registry.form.resourceBothAuth", { ns: "mcp" }),
+				});
+				hasErrors = true;
+			}
+			if (hasPrivateKeySettingsWithoutKey(data.token_exchange)) {
+				setError("token_exchange.resource_private_key", { message: PRIVATE_KEY_REQUIRED_MESSAGE });
+				hasErrors = true;
+			}
+			if (hasSendMethodWithoutSecret(data.token_exchange)) {
+				setError("token_exchange.resource_client_secret", { message: SECRET_REQUIRED_FOR_METHOD_MESSAGE });
+				hasErrors = true;
+			}
+			const endpoint = data.token_exchange?.resource_token_endpoint?.trim();
+			if (endpoint && !isHTTPSOrLoopbackURL(endpoint)) {
+				setError("token_exchange.resource_token_endpoint", {
+					message: i18n.t("registry.form.resourceTokenEndpointHttps", { ns: "mcp" }),
+				});
+				hasErrors = true;
+			}
+			const assertionAudience = data.token_exchange?.resource_assertion_audience?.trim();
+			if (assertionAudience && !isHTTPSOrLoopbackURL(assertionAudience)) {
+				setError("token_exchange.resource_assertion_audience", {
+					message: i18n.t("registry.form.assertionAudienceHttps", { ns: "mcp" }),
+				});
 				hasErrors = true;
 			}
 		}
@@ -479,21 +523,11 @@ export function buildMCPClientPayload(data: CreateMCPClientRequest, satellites: 
 		tls_config: isStdio ? undefined : buildTLSConfigPayload(data.tls_config),
 		oauth_config:
 			authType === "oauth" || authType === "per_user_oauth"
-				? {
-						client_id: data.oauth_config?.client_id ?? emptySecretVar,
-						client_secret:
-							data.oauth_config?.client_secret?.value ||
-							data.oauth_config?.client_secret?.type === "env" ||
-							data.oauth_config?.client_secret?.type === "vault"
-								? data.oauth_config.client_secret
-								: undefined,
-						authorize_url: data.oauth_config?.authorize_url || undefined,
-						token_url: data.oauth_config?.token_url || undefined,
-						registration_url: data.oauth_config?.registration_url || undefined,
-						scopes: satellites.scopesText.trim() ? parseArrayFromText(satellites.scopesText) : undefined,
-						server_url: data.connection_string?.value || undefined,
-						resource: satellites.resourceText.trim() || undefined,
-					}
+				? buildOAuthConfigPayload(data.oauth_config, {
+						serverURL: data.connection_string?.value,
+						scopesText: satellites.scopesText,
+						resourceText: satellites.resourceText,
+					})
 				: undefined,
 		// Every network auth type can carry static admin headers on data.headers
 		// (per-user values are submitted separately by end users); STDIO has no
@@ -504,9 +538,9 @@ export function buildMCPClientPayload(data: CreateMCPClientRequest, satellites: 
 			authType === "token_exchange"
 				? {
 						audience: data.token_exchange?.audience?.trim() || "",
-						use_idp_credentials: data.token_exchange?.use_idp_credentials || undefined,
-						client_id: data.token_exchange?.use_idp_credentials ? undefined : (data.token_exchange?.client_id ?? emptySecretVar),
-						client_secret: data.token_exchange?.use_idp_credentials
+						use_idp_credentials: exchangesAsSSOApplication(data.token_exchange) || undefined,
+						client_id: exchangesAsSSOApplication(data.token_exchange) ? undefined : (data.token_exchange?.client_id ?? emptySecretVar),
+						client_secret: exchangesAsSSOApplication(data.token_exchange)
 							? undefined
 							: data.token_exchange?.client_secret?.value ||
 								  data.token_exchange?.client_secret?.type === "env" ||
@@ -515,6 +549,7 @@ export function buildMCPClientPayload(data: CreateMCPClientRequest, satellites: 
 								: undefined,
 						scopes: satellites.tokenExchangeScopesText.trim() ? parseArrayFromText(satellites.tokenExchangeScopesText) : undefined,
 						authorization_server_url: data.token_exchange?.authorization_server_url?.trim() || undefined,
+						...tokenExchangeProfilePayload(data.token_exchange),
 					}
 				: undefined,
 		// Network transports expose every tool the server reports; an openapi
@@ -524,6 +559,8 @@ export function buildMCPClientPayload(data: CreateMCPClientRequest, satellites: 
 			: ["*"],
 		// Extra headers only ride on the network transports.
 		allowed_extra_headers: isStdio ? undefined : parseArrayFromText(satellites.allowedExtraHeadersText),
+		// An openapi server is synthesized in process; there is no protocol to negotiate.
+		max_protocol_version: isOpenAPI ? undefined : data.max_protocol_version,
 	};
 }
 
@@ -858,6 +895,32 @@ export function MCPClientFormFields({ form, satellites, headersValidationError, 
 								)}
 							/>
 						)}
+					{!isOpenAPI && (
+						<FormField
+							control={control}
+							name="max_protocol_version"
+							render={({ field }) => (
+								<FormItem className="flex flex-row items-center justify-between gap-4 px-4 py-3">
+									<div className="flex items-center gap-2">
+										<FormLabel>{t("registry.form.maxProtocolVersion")}</FormLabel>
+										<TooltipProvider>
+											<Tooltip>
+												<TooltipTrigger asChild>
+													<Info className="text-muted-foreground h-4 w-4 cursor-help" />
+												</TooltipTrigger>
+												<TooltipContent className="max-w-xs">
+													<p>{t("registry.form.maxProtocolVersionTooltip")}</p>
+												</TooltipContent>
+											</Tooltip>
+										</TooltipProvider>
+									</div>
+									<FormControl>
+										<MaxProtocolVersionSelect value={field.value} onChange={field.onChange} />
+									</FormControl>
+								</FormItem>
+							)}
+						/>
+					)}
 				</div>
 			</div>
 
@@ -1262,6 +1325,7 @@ export function MCPClientFormFields({ form, satellites, headersValidationError, 
 										clientIdHelperText={t("registry.form.oauthClientIdHelper")}
 										clientIdTooltip={t("registry.form.oauthClientIdTooltip")}
 										clientIdTestId="mcp-oauth-client-id"
+										clientMetadataDocumentTestId="mcp-oauth-use-client-metadata-document"
 										clientSecretLabel={t("registry.form.oauthClientSecretPkce")}
 										clientSecretPlaceholder={t("registry.form.oauthClientSecretPlaceholder")}
 										clientSecretHelperText={t("registry.form.oauthClientSecretHelper")}

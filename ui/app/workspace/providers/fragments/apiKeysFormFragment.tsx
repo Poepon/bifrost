@@ -92,6 +92,17 @@ const BEDROCK_VPC_ENDPOINT_SERVICES = [
 	},
 ];
 
+// The one runtime host SageMaker endpoints are invoked on; an interface VPC endpoint, FIPS or
+// dual-stack host can replace it.
+const SAGEMAKER_VPC_ENDPOINT_SERVICES = [
+	{
+		name: "runtime",
+		label: "Runtime", // i18n-ignore
+		description: "Serves all endpoint invocations.", // i18n-ignore
+		placeholder: "vpce-0abc123-x1y2z3.runtime.sagemaker.us-east-1.vpce.amazonaws.com",
+	},
+];
+
 // VPC endpoint host overrides for AWS PrivateLink. Collapsed by default: most deployments reach
 // Bedrock over the public regional endpoints and never set these.
 function VPCEndpointsFormField({
@@ -148,6 +159,7 @@ export function ApiKeyFormFragment({ control, providerName, baseProviderType, fo
 	const effectiveProvider = baseProviderType ?? providerName;
 	const isBedrock = effectiveProvider === "bedrock";
 	const isBedrockMantle = effectiveProvider === "bedrock_mantle";
+	const isSageMaker = effectiveProvider === "sagemaker";
 	const isVertex = effectiveProvider === "vertex";
 	const isAzure = effectiveProvider === "azure";
 	const isReplicate = effectiveProvider === "replicate";
@@ -173,6 +185,9 @@ export function ApiKeyFormFragment({ control, providerName, baseProviderType, fo
 
 	// Auth type state for Bedrock Mantle: 'iam_role', 'explicit', or 'api_key'
 	const [bedrockMantleAuthType, setBedrockMantleAuthType] = useState<"iam_role" | "explicit" | "api_key">("iam_role");
+
+	// Auth type state for SageMaker: 'iam_role' (default AWS credential chain), 'explicit', or 'api_key' (pre-minted token)
+	const [sageMakerAuthType, setSageMakerAuthType] = useState<"iam_role" | "explicit" | "api_key">("iam_role");
 
 	// Auth type state for Databricks: 'pat' (personal access token) or 'oauth_m2m' (service principal)
 	const [databricksAuthType, setDatabricksAuthType] = useState<"pat" | "oauth_m2m">("pat");
@@ -298,6 +313,26 @@ export function ApiKeyFormFragment({ control, providerName, baseProviderType, fo
 		// repopulates an existing key via form.reset(...) after mount, not only on first render.
 	}, [isBedrockMantle, form, form.formState.defaultValues]);
 
+	useEffect(() => {
+		if (form.formState.isDirty) return;
+		if (isSageMaker) {
+			const accessKey = form.getValues("key.sagemaker_key_config.access_key");
+			const secretKey = form.getValues("key.sagemaker_key_config.secret_key");
+			const apiKey = form.getValues("key.value");
+			const hasExplicitCreds = accessKey?.value || accessKey?.ref || secretKey?.value || secretKey?.ref;
+			const hasApiKey = apiKey?.value || apiKey?.ref;
+			let detected: "iam_role" | "explicit" | "api_key" = "iam_role";
+			if (hasExplicitCreds) {
+				detected = "explicit";
+			} else if (hasApiKey) {
+				detected = "api_key";
+			}
+			setSageMakerAuthType(detected);
+			form.setValue("key.sagemaker_key_config._auth_type", detected);
+		}
+		// Re-run when ProviderKeyForm repopulates an existing key via form.reset(...) after mount.
+	}, [isSageMaker, form, form.formState.defaultValues]);
+
 	return (
 		<div data-tab="api-keys" className="space-y-4 overflow-hidden">
 			<div className="flex items-start gap-4 px-0.5">
@@ -366,23 +401,30 @@ export function ApiKeyFormFragment({ control, providerName, baseProviderType, fo
 				/>
 			</div>
 			{/* Hide API Key field for providers with dedicated auth tabs */}
-			{!isAzure && !isBedrock && !isBedrockMantle && !isVertex && !isDatabricks && !isOpenAICompatible && !isGithubCopilot && (
-				<FormField
-					control={control}
-					name={`key.value`}
-					render={({ field }) => (
-						<FormItem className="px-0.5">
-							<FormLabel>
-								{t("providers.apiKey")} {isVLLM ? t("providers.optionalParen") : ""}
-							</FormLabel>
-							<FormControl>
-								<SecretVarInput placeholder={t("providers.keys.apiKeyOrEnv")} type="text" {...field} />
-							</FormControl>
-							<FormMessage />
-						</FormItem>
-					)}
-				/>
-			)}
+			{!isAzure &&
+				!isBedrock &&
+				!isBedrockMantle &&
+				!isSageMaker &&
+				!isVertex &&
+				!isDatabricks &&
+				!isOpenAICompatible &&
+				!isGithubCopilot && (
+					<FormField
+						control={control}
+						name={`key.value`}
+						render={({ field }) => (
+							<FormItem className="px-0.5">
+								<FormLabel>
+									{t("providers.apiKey")} {isVLLM ? t("providers.optionalParen") : ""}
+								</FormLabel>
+								<FormControl>
+									<SecretVarInput placeholder={t("providers.keys.apiKeyOrEnv")} type="text" {...field} />
+								</FormControl>
+								<FormMessage />
+							</FormItem>
+						)}
+					/>
+				)}
 			<>
 				<FormField
 					control={control}
@@ -633,6 +675,44 @@ export function ApiKeyFormFragment({ control, providerName, baseProviderType, fo
 							/>
 						</>
 					)}
+					<FormField
+						control={control}
+						name="key.azure_key_config.use_speech_endpoints"
+						render={({ field }) => (
+							<FormItem className="flex flex-row items-center justify-between rounded-sm border p-2">
+								<div className="space-y-1.5">
+									<FormLabel>{t("providers.keys.azureUseSpeech")}</FormLabel>
+									<FormDescription>{t("providers.keys.azureUseSpeechHelp")}</FormDescription>
+								</div>
+								<FormControl>
+									<Switch
+										data-testid="apikey-azure-use-speech-endpoints-switch"
+										checked={field.value ?? false}
+										onCheckedChange={field.onChange}
+									/>
+								</FormControl>
+							</FormItem>
+						)}
+					/>
+					<FormField
+						control={control}
+						name="key.azure_key_config.use_voice_live_endpoints"
+						render={({ field }) => (
+							<FormItem className="flex flex-row items-center justify-between rounded-sm border p-2">
+								<div className="space-y-1.5">
+									<FormLabel>{t("providers.keys.azureUseVoiceLive")}</FormLabel>
+									<FormDescription>{t("providers.keys.azureUseVoiceLiveHelp")}</FormDescription>
+								</div>
+								<FormControl>
+									<Switch
+										data-testid="apikey-azure-use-voice-live-endpoints-switch"
+										checked={field.value ?? false}
+										onCheckedChange={field.onChange}
+									/>
+								</FormControl>
+							</FormItem>
+						)}
+					/>
 					{supportsBatchAPI && <BatchAPIFormField control={control} form={form} />}
 				</div>
 			)}
@@ -2056,6 +2136,212 @@ export function ApiKeyFormFragment({ control, providerName, baseProviderType, fo
 						configKey="key.bedrock_mantle_key_config"
 						services={BEDROCK_VPC_ENDPOINT_SERVICES.filter((s) => s.name === "mantle")}
 					/>
+				</div>
+			)}
+
+			{isSageMaker && (
+				<div className="space-y-4" data-testid="apikey-sagemaker-section">
+					<Separator className="my-6" />
+					<div className="space-y-2">
+						<FormLabel>{t("providers.keys.authMethod")}</FormLabel>
+						<Tabs
+							value={sageMakerAuthType}
+							onValueChange={(v) => {
+								setSageMakerAuthType(v as "iam_role" | "explicit" | "api_key");
+								form.setValue("key.sagemaker_key_config._auth_type", v, { shouldDirty: true, shouldValidate: true });
+								if (v === "iam_role") {
+									// Clear explicit credentials and the pre-minted token when switching to the default chain (an empty value, not undefined: updates keep omitted fields)
+									form.setValue("key.sagemaker_key_config.access_key", undefined, { shouldDirty: true });
+									form.setValue("key.sagemaker_key_config.secret_key", undefined, { shouldDirty: true });
+									form.setValue("key.sagemaker_key_config.session_token", undefined, { shouldDirty: true });
+									form.setValue("key.value", { value: "", ref: "" }, { shouldDirty: true });
+								} else if (v === "explicit") {
+									form.setValue("key.value", { value: "", ref: "" }, { shouldDirty: true });
+								} else if (v === "api_key") {
+									// A pre-minted token carries its own identity: clear AWS credentials and assume-role fields
+									form.setValue("key.sagemaker_key_config.access_key", undefined, { shouldDirty: true });
+									form.setValue("key.sagemaker_key_config.secret_key", undefined, { shouldDirty: true });
+									form.setValue("key.sagemaker_key_config.session_token", undefined, { shouldDirty: true });
+									form.setValue("key.sagemaker_key_config.role_arn", undefined, { shouldDirty: true });
+									form.setValue("key.sagemaker_key_config.external_id", undefined, { shouldDirty: true });
+									form.setValue("key.sagemaker_key_config.session_name", undefined, { shouldDirty: true });
+								}
+							}}
+						>
+							<TabsList className="flex w-full justify-start">
+								<TabsTrigger data-testid="apikey-sagemaker-iam-role-tab" value="iam_role">
+									{t("providers.keys.iamRoleInherited")}
+								</TabsTrigger>
+								<TabsTrigger data-testid="apikey-sagemaker-explicit-credentials-tab" value="explicit">
+									{t("providers.keys.explicitCredentials")}
+								</TabsTrigger>
+								<TabsTrigger data-testid="apikey-sagemaker-api-key-tab" value="api_key">
+									{t("providers.keys.bearerToken")}
+								</TabsTrigger>
+							</TabsList>
+						</Tabs>
+						{sageMakerAuthType === "iam_role" && (
+							<p className="text-muted-foreground text-sm">{t("providers.keys.sagemakerIamRoleHelp")}</p>
+						)}
+						{sageMakerAuthType === "explicit" && (
+							<p className="text-muted-foreground text-sm">{t("providers.keys.sagemakerExplicitHelp")}</p>
+						)}
+						{sageMakerAuthType === "api_key" && (
+							<p className="text-muted-foreground text-sm">{t("providers.keys.sagemakerApiKeyHelp")}</p>
+						)}
+					</div>
+
+					{sageMakerAuthType === "explicit" && (
+						<>
+							<FormField
+								control={control}
+								name={`key.sagemaker_key_config.access_key`}
+								render={({ field }) => (
+									<FormItem>
+										<FormLabel>{t("providers.keys.accessKeyRequired")}</FormLabel>
+										<FormControl>
+											<SecretVarInput
+												data-testid="apikey-sagemaker-access-key-input"
+												placeholder={t("providers.keys.awsAccessKeyPlaceholder")}
+												{...field}
+											/>
+										</FormControl>
+										<FormMessage />
+									</FormItem>
+								)}
+							/>
+							<FormField
+								control={control}
+								name={`key.sagemaker_key_config.secret_key`}
+								render={({ field }) => (
+									<FormItem>
+										<FormLabel>{t("providers.keys.secretKeyRequired")}</FormLabel>
+										<FormControl>
+											<SecretVarInput
+												data-testid="apikey-sagemaker-secret-key-input"
+												placeholder={t("providers.keys.awsSecretKeyPlaceholder")}
+												{...field}
+											/>
+										</FormControl>
+										<FormMessage />
+									</FormItem>
+								)}
+							/>
+							<FormField
+								control={control}
+								name={`key.sagemaker_key_config.session_token`}
+								render={({ field }) => (
+									<FormItem>
+										<FormLabel>{t("providers.keys.sessionTokenOptional")}</FormLabel>
+										<FormControl>
+											<SecretVarInput
+												data-testid="apikey-sagemaker-session-token-input"
+												placeholder={t("providers.keys.awsSessionTokenPlaceholder")}
+												{...field}
+											/>
+										</FormControl>
+										<FormMessage />
+									</FormItem>
+								)}
+							/>
+						</>
+					)}
+
+					{sageMakerAuthType === "api_key" && (
+						<FormField
+							control={control}
+							name={`key.value`}
+							render={({ field }) => (
+								<FormItem>
+									<FormLabel>{t("providers.keys.bearerToken")}</FormLabel>
+									<FormControl>
+										<SecretVarInput
+											data-testid="apikey-sagemaker-api-key-input"
+											placeholder={t("providers.keys.sagemakerBearerPlaceholder")}
+											type="text"
+											{...field}
+										/>
+									</FormControl>
+									<FormMessage />
+								</FormItem>
+							)}
+						/>
+					)}
+
+					<FormField
+						control={control}
+						name={`key.sagemaker_key_config.region`}
+						render={({ field }) => (
+							<FormItem>
+								<FormLabel>{t("providers.keys.regionRequired")}</FormLabel>
+								<FormDescription>{t("providers.keys.sagemakerRegionHelp")}</FormDescription>
+								<FormControl>
+									<SecretVarInput data-testid="apikey-sagemaker-region-input" placeholder={t("providers.keys.awsRegionPlaceholder")} {...field} />
+								</FormControl>
+								<FormMessage />
+							</FormItem>
+						)}
+					/>
+
+					{sageMakerAuthType !== "api_key" && (
+						<>
+							<FormField
+								control={control}
+								name={`key.sagemaker_key_config.role_arn`}
+								render={({ field }) => (
+									<FormItem>
+										<FormLabel>{t("providers.keys.assumeRoleArnOptional")}</FormLabel>
+										<FormDescription>{t("providers.keys.sagemakerAssumeRoleHelp")}</FormDescription>
+										<FormControl>
+											<SecretVarInput
+												data-testid="apikey-sagemaker-role-arn-input"
+												placeholder={t("providers.keys.roleArnPlaceholder")}
+												{...field}
+											/>
+										</FormControl>
+										<FormMessage />
+									</FormItem>
+								)}
+							/>
+							<FormField
+								control={control}
+								name={`key.sagemaker_key_config.external_id`}
+								render={({ field }) => (
+									<FormItem>
+										<FormLabel>{t("providers.keys.externalIdOptional")}</FormLabel>
+										<FormDescription>{t("providers.keys.externalIdHelpPeriod")}</FormDescription>
+										<FormControl>
+											<SecretVarInput
+												data-testid="apikey-sagemaker-external-id-input"
+												placeholder={t("providers.keys.externalIdPlaceholder")}
+												{...field}
+											/>
+										</FormControl>
+										<FormMessage />
+									</FormItem>
+								)}
+							/>
+							<FormField
+								control={control}
+								name={`key.sagemaker_key_config.session_name`}
+								render={({ field }) => (
+									<FormItem>
+										<FormLabel>{t("providers.keys.sessionNameOptional")}</FormLabel>
+										<FormDescription>{t("providers.keys.sessionNameHelpPeriod")}</FormDescription>
+										<FormControl>
+											<SecretVarInput
+												data-testid="apikey-sagemaker-session-name-input"
+												placeholder={t("providers.keys.sessionNamePlaceholder")}
+												{...field}
+											/>
+										</FormControl>
+										<FormMessage />
+									</FormItem>
+								)}
+							/>
+						</>
+					)}
+					<VPCEndpointsFormField control={control} configKey="key.sagemaker_key_config" services={SAGEMAKER_VPC_ENDPOINT_SERVICES} />
 				</div>
 			)}
 		</div>

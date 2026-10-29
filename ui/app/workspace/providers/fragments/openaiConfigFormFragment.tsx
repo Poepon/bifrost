@@ -22,6 +22,7 @@ export function OpenAIConfigFormFragment({ provider }: OpenAIConfigFormFragmentP
 	const dispatch = useAppDispatch();
 	const hasUpdateProviderAccess = useRbac(RbacResource.ModelProvider, RbacOperation.Update);
 	const [updateProvider, { isLoading: isUpdatingProvider }] = useUpdateProviderMutation();
+	const isFireworks = provider.name === "fireworks";
 	const form = useForm<OpenAIConfigFormSchema, any, OpenAIConfigFormSchema>({
 		resolver: zodResolver(openaiConfigFormSchema) as Resolver<OpenAIConfigFormSchema, any, OpenAIConfigFormSchema>,
 		mode: "onChange",
@@ -51,11 +52,11 @@ export function OpenAIConfigFormFragment({ provider }: OpenAIConfigFormFragmentP
 		)
 			.unwrap()
 			.then(() => {
-				toast.success(t("providers.openaiUpdated"));
+				toast.success(isFireworks ? t("providers.configUpdated") : t("providers.openaiUpdated"));
 				form.reset(data);
 			})
 			.catch((err) => {
-				toast.error(t("providers.failedUpdateOpenai"), {
+				toast.error(isFireworks ? t("providers.failedUpdateConfig") : t("providers.failedUpdateOpenai"), {
 					description: getErrorMessage(err),
 				});
 			});
@@ -73,7 +74,9 @@ export function OpenAIConfigFormFragment({ provider }: OpenAIConfigFormFragmentP
 								<div className="flex items-center justify-between space-x-2">
 									<div className="space-y-0.5">
 										<FormLabel>{t("providers.openaiForm.disableStore")}</FormLabel>
-										<p className="text-muted-foreground text-xs">{t("providers.openaiForm.disableStoreHelp")}</p>
+										<p className="text-muted-foreground text-xs">
+											{isFireworks ? t("providers.openaiForm.disableStoreHelpFireworks") : t("providers.openaiForm.disableStoreHelp")}
+										</p>
 									</div>
 									<FormControl>
 										<Switch
@@ -100,7 +103,7 @@ export function OpenAIConfigFormFragment({ provider }: OpenAIConfigFormFragmentP
 						disabled={!form.formState.isDirty || !form.formState.isValid || !hasUpdateProviderAccess || isUpdatingProvider}
 						isLoading={isUpdatingProvider}
 					>
-						{t("providers.saveOpenaiConfig")}
+						{isFireworks ? t("providers.saveConfig") : t("providers.saveOpenaiConfig")}
 					</Button>
 				</div>
 			</form>

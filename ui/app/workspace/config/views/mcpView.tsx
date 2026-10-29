@@ -1,10 +1,12 @@
 import PageTitle from "@/components/pageTitle";
 import { Accordion, AccordionContent, AccordionItem, AccordionTrigger } from "@/components/ui/accordion";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
+import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { SecretVarInput } from "@/components/ui/secretVarInput";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { MCP_MAX_PROTOCOL_VERSION_OPTIONS } from "@/lib/constants/mcp";
 import { Switch } from "@/components/ui/switch";
 import { TagInput } from "@/components/ui/tagInput";
 import { IS_ENTERPRISE } from "@/lib/constants/config";
@@ -14,6 +16,7 @@ import { SecretVar } from "@/lib/types/schemas";
 import { isSecretVarSet } from "@/lib/utils/secretVarForm";
 import { RbacOperation, RbacResource, useRbac } from "@enterprise/lib";
 import { useGetSCIMProvidersQuery } from "@enterprise/lib/store/apis/scimApi";
+import { Link } from "@tanstack/react-router";
 import { AlertTriangle } from "lucide-react";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { Trans, useTranslation } from "react-i18next";
@@ -31,6 +34,9 @@ export default function MCPView() {
 	const hasSettingsUpdateAccess = useRbac(RbacResource.Settings, RbacOperation.Update);
 	const { data: bifrostConfig } = useGetCoreConfigQuery({ fromDB: true });
 	const config = bifrostConfig?.client_config;
+	const issuerURL = config?.oauth2_server_config?.issuer_url;
+	// An env or vault issuer names its reference whether or not it resolved.
+	const issuerRef = issuerURL?.type === "env" || issuerURL?.type === "vault" ? issuerURL.ref?.trim() : "";
 
 	// The "require identity-provider login" toggle is enterprise-only and only
 	// meaningful when an identity provider is configured — the backend ignores
@@ -83,12 +89,12 @@ export default function MCPView() {
 	const hasChanges = useMemo(() => {
 		if (!config) return false;
 		const clientURLChanged = !secretVarEquals(localConfig.mcp_external_client_url, config.mcp_external_client_url);
-		const issuerURLChanged = !secretVarEquals(localConfig.oauth2_server_config?.issuer_url, config.oauth2_server_config?.issuer_url);
 		return (
 			localConfig.mcp_agent_depth !== config.mcp_agent_depth ||
 			localConfig.mcp_tool_execution_timeout !== config.mcp_tool_execution_timeout ||
 			localConfig.mcp_code_mode_binding_level !== (config.mcp_code_mode_binding_level || "server") ||
 			localConfig.mcp_tool_sync_interval !== (config.mcp_tool_sync_interval ?? 10) ||
+			(localConfig.mcp_max_protocol_version || "auto") !== (config.mcp_max_protocol_version || "auto") ||
 			localConfig.mcp_max_instructions_per_client !== (config.mcp_max_instructions_per_client ?? 0) ||
 			localConfig.mcp_max_instructions_total !== (config.mcp_max_instructions_total ?? 0) ||
 			!codeModeLimitsEqual(localConfig.mcp_code_mode_limits, config.mcp_code_mode_limits) ||
@@ -97,7 +103,6 @@ export default function MCPView() {
 			!stringListEquals(localConfig.mcp_oauth_private_allowlist, config.mcp_oauth_private_allowlist) ||
 			clientURLChanged ||
 			(localConfig.mcp_server_auth_mode ?? "headers") !== (config.mcp_server_auth_mode ?? "headers") ||
-			issuerURLChanged ||
 			(localConfig.oauth2_server_config?.auth_code_ttl ?? 300) !== (config.oauth2_server_config?.auth_code_ttl ?? 300) ||
 			(localConfig.oauth2_server_config?.access_token_ttl ?? 600) !== (config.oauth2_server_config?.access_token_ttl ?? 600) ||
 			(localConfig.oauth2_server_config?.disable_vk_identity ?? false) !== (config.oauth2_server_config?.disable_vk_identity ?? false) ||
@@ -195,13 +200,6 @@ export default function MCPView() {
 				oauth2_server_config: value === "oauth" ? prev.oauth2_server_config : { ...prev.oauth2_server_config, disable_vk_identity: false },
 			}));
 		}
-	}, []);
-
-	const handleIssuerURLChange = useCallback((value: SecretVar) => {
-		setLocalConfig((prev) => ({
-			...prev,
-			oauth2_server_config: { ...prev.oauth2_server_config, issuer_url: value },
-		}));
 	}, []);
 
 	const handleAuthCodeTTLChange = useCallback((value: string) => {
@@ -397,6 +395,35 @@ export default function MCPView() {
 						onChange={(e) => handleToolSyncIntervalChange(e.target.value)}
 						min="0"
 					/>
+				</div>
+
+				{/* Max Protocol Version */}
+				<div className="flex items-center justify-between space-x-2 rounded-sm border p-4">
+					<div className="space-y-0.5">
+						<label htmlFor="mcp-max-protocol-version" className="text-sm font-medium">
+							Max Protocol Version
+						</label>
+						<p className="text-muted-foreground text-sm">
+							Newest MCP protocol version Bifrost offers to MCP servers. Auto uses the latest Bifrost supports. Each server can override
+							this.
+						</p>
+					</div>
+					<Select
+						value={localConfig.mcp_max_protocol_version || "auto"}
+						onValueChange={(value) => setLocalConfig((prev) => ({ ...prev, mcp_max_protocol_version: value }))}
+						disabled={!hasSettingsUpdateAccess}
+					>
+						<SelectTrigger id="mcp-max-protocol-version" data-testid="mcp-max-protocol-version-select" className="w-40">
+							<SelectValue />
+						</SelectTrigger>
+						<SelectContent>
+							{MCP_MAX_PROTOCOL_VERSION_OPTIONS.map((option) => (
+								<SelectItem key={option.value} value={option.value} data-testid={`mcp-max-protocol-version-${option.value}`}>
+									{option.label}
+								</SelectItem>
+							))}
+						</SelectContent>
+					</Select>
 				</div>
 
 				{/* Disable Auto Tool Injection */}
@@ -665,30 +692,43 @@ export default function MCPView() {
 								<div className="mt-4 space-y-4 border-t pt-4">
 									<p className="text-sm font-medium">{t("mcpSettings.oauth2Settings")}</p>
 
-									{/* Issuer URL */}
-									<div className="space-y-1.5">
-										<label htmlFor="oauth2-issuer-url" className="text-sm font-medium">
+									{/* Issuer URL: shared by MCP OAuth and Cross App Access, so it is edited under Security. */}
+									<div className="space-y-1.5" data-testid="oauth2-issuer-url-summary">
+										<p className="text-sm font-medium">
 											{t("mcpSettings.issuerUrl")} <span className="text-destructive">*</span>
-										</label>
-										<p className="text-muted-foreground text-sm">
-											<Trans
-												t={t}
-												i18nKey="mcpSettings.issuerUrlHelp"
-												components={{
-													code0: <code className="text-xs" />,
-													code1: <code className="text-xs" />,
-													code2: <code className="text-xs" />,
-												}}
-											/>
 										</p>
-										<SecretVarInput
-											id="oauth2-issuer-url"
-											data-testid="oauth2-issuer-url-input"
-											placeholder={t("mcpSettings.issuerUrlPlaceholder")}
-											value={localConfig.oauth2_server_config?.issuer_url}
-											onChange={handleIssuerURLChange}
-											disabled={!hasSettingsUpdateAccess}
-										/>
+										<p className="text-muted-foreground text-sm">
+											{t("mcpSettings.issuerUrlRequiredModes")}{" "}
+											{/* The API returns an env or vault issuer resolved; it is a public URL, so it is shown as is,
+											    next to the reference it comes from, as the Security editor shows it. */}
+											{issuerURL?.value?.trim() ? (
+												<code className="text-xs" data-testid="oauth2-issuer-url-value">
+													{issuerURL.value.trim()}
+												</code>
+											) : issuerRef ? (
+												<span className="text-destructive" data-testid="oauth2-issuer-url-unresolved">
+													{t("mcpSettings.issuerUrlNotResolved")}
+												</span>
+											) : (
+												<span className="text-destructive">{t("mcpSettings.issuerUrlNotSet")}</span>
+											)}{" "}
+											{issuerRef && (
+												<Badge
+													variant={issuerURL?.type === "vault" ? "warning" : "success"}
+													className="whitespace-nowrap"
+													data-testid="oauth2-issuer-url-ref"
+												>
+													{issuerRef}
+												</Badge>
+											)}{" "}
+											<Link
+												to="/workspace/config/security"
+												className="text-primary underline"
+												data-testid="oauth2-issuer-url-security-link"
+											>
+												{t("mcpSettings.issuerUrlEditInSecurity")}
+											</Link>
+										</p>
 									</div>
 
 									{/* Token TTLs */}

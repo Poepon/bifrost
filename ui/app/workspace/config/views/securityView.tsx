@@ -17,6 +17,7 @@ import { authProofOfControlSchema, SecretVar } from "@/lib/types/schemas";
 import { parseArrayFromText } from "@/lib/utils/array";
 import { formatCooldown } from "@/lib/utils/duration";
 import { getApiBaseUrl } from "@/lib/utils/port";
+import { isSecretVarSet } from "@/lib/utils/secretVarForm";
 import { getPasswordPolicyFailures, validateOrigins } from "@/lib/utils/validation";
 import { RbacOperation, RbacResource, useRbac } from "@enterprise/lib";
 import { useGetAuthTypeQuery } from "@enterprise/lib/store/apis/scimApi";
@@ -27,6 +28,9 @@ import { toast } from "sonner";
 
 // Go duration string: one or more <number><unit> segments, e.g. "5m", "1h30m".
 const COOLDOWN_PATTERN = /^(\d+(\.\d+)?(ns|us|µs|ms|s|m|h))+$/;
+
+const secretVarEquals = (a?: SecretVar, b?: SecretVar) =>
+	(a?.value ?? "") === (b?.value ?? "") && (a?.ref ?? "") === (b?.ref ?? "") && (a?.type ?? "plain_text") === (b?.type ?? "plain_text");
 
 export default function SecurityView() {
 	const { t } = useTranslation("config");
@@ -161,6 +165,7 @@ export default function SecurityView() {
 		const dualCredentialConflictBehaviorChanged =
 			(localConfig.dual_credential_conflict_behavior || "prefer_idp") !== (config.dual_credential_conflict_behavior || "prefer_idp");
 		const vkRotationCooldownChanged = formatCooldown(localConfig.vk_rotation_cooldown) !== formatCooldown(config.vk_rotation_cooldown);
+		const issuerURLChanged = !secretVarEquals(localConfig.oauth2_server_config?.issuer_url, config.oauth2_server_config?.issuer_url);
 
 		return (
 			originsChanged ||
@@ -175,7 +180,8 @@ export default function SecurityView() {
 			skipAccessProfileUserVirtualKeyCreationChanged ||
 			skipAccessProfileUserVirtualKeyDeletionChanged ||
 			dualCredentialConflictBehaviorChanged ||
-			vkRotationCooldownChanged
+			vkRotationCooldownChanged ||
+			issuerURLChanged
 		);
 	}, [config, localConfig, authConfig, bifrostConfig, showPasswordSection, credentialsChanged]);
 
@@ -277,6 +283,11 @@ export default function SecurityView() {
 
 			if (!validation.isValid && localConfig.allowed_origins.length > 0) {
 				toast.error(t("security.toastInvalidOrigins", { origins: validation.invalidOrigins.join(", ") }));
+				return;
+			}
+			const oauthModeActive = localConfig.mcp_server_auth_mode === "both" || localConfig.mcp_server_auth_mode === "oauth";
+			if (oauthModeActive && !isSecretVarSet(localConfig.oauth2_server_config?.issuer_url)) {
+				toast.error(t("security.toastIssuerUrlRequired"));
 				return;
 			}
 			const cooldownInput = localValues.vk_rotation_cooldown.trim();
@@ -692,6 +703,44 @@ export default function SecurityView() {
 						/>
 					</div>
 				)}
+				{/* OAuth issuer URL: shared by MCP OAuth and Cross App Access */}
+				<div className="space-y-2 rounded-sm border p-4" data-testid="oauth2-issuer-url-section">
+					<div className="space-y-0.5">
+						<label htmlFor="oauth2-issuer-url" className="text-sm font-medium">
+							{t("security.oauthIssuerUrl")}
+						</label>
+						<p className="text-muted-foreground text-sm">
+							<Trans
+								t={t}
+								i18nKey="security.oauthIssuerUrlHelp"
+								components={{
+									code0: <code className="text-xs" />,
+									code1: <code className="text-xs" />,
+									code2: <code className="text-xs" />,
+								}}
+							/>
+						</p>
+					</div>
+					<SecretVarInput
+						id="oauth2-issuer-url"
+						data-testid="oauth2-issuer-url-input"
+						placeholder={t("mcpSettings.issuerUrlPlaceholder")}
+						value={localConfig.oauth2_server_config?.issuer_url}
+						onChange={(value: SecretVar) =>
+							setLocalConfig((prev) => ({ ...prev, oauth2_server_config: { ...prev.oauth2_server_config, issuer_url: value } }))
+						}
+						disabled={!hasSettingsUpdateAccess}
+					/>
+					{isSecretVarSet(config?.oauth2_server_config?.issuer_url) &&
+						!secretVarEquals(localConfig.oauth2_server_config?.issuer_url, config?.oauth2_server_config?.issuer_url) && (
+							<Alert variant="warning" data-testid="oauth2-issuer-url-change-warning">
+								<AlertTriangle className="size-4" />
+								<AlertDescription>
+									{t("security.issuerChangeWarning")}
+								</AlertDescription>
+							</Alert>
+						)}
+				</div>
 				{/* Allowed Origins */}
 				{needsRestart && <RestartWarning />}
 				<div>
@@ -768,7 +817,7 @@ export default function SecurityView() {
 				</div>
 			</div>
 			<div className="bg-card sticky bottom-0 flex justify-end py-2">
-				<Button onClick={handleSave} disabled={!hasChanges || isLoading || !hasSettingsUpdateAccess}>
+				<Button onClick={handleSave} disabled={!hasChanges || isLoading || !hasSettingsUpdateAccess} data-testid="security-save-btn">
 					{isLoading ? t("saving") : t("saveChanges")}
 				</Button>
 			</div>

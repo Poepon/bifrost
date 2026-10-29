@@ -1,17 +1,16 @@
 import { ColumnConfigDropdown, type ColumnConfigEntry } from "@/components/table";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { Command, CommandItem, CommandList } from "@/components/ui/command";
 import { DateTimePickerWithRange } from "@/components/ui/datePickerWithRange";
 import {
 	DropdownMenu,
 	DropdownMenuContent,
+	DropdownMenuItem,
 	DropdownMenuRadioGroup,
 	DropdownMenuRadioItem,
 	DropdownMenuTrigger,
 } from "@/components/ui/dropdownMenu";
 import { Input } from "@/components/ui/input";
-import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { useTimezonePreference } from "@/lib/hooks/useTimezonePreference";
 import { getErrorMessage } from "@/lib/store";
@@ -92,7 +91,6 @@ export function LogsHeaderView({
 	order = "desc",
 }: LogsHeaderViewProps) {
 	const { t } = useTranslation("observability");
-	const [openMoreActionsPopover, setOpenMoreActionsPopover] = useState(false);
 	const [recalcDialogOpen, setRecalcDialogOpen] = useState(false);
 	const [exportDialogOpen, setExportDialogOpen] = useState(false);
 	// Id of the recalculation job to track. Setting it starts polling via the query
@@ -454,86 +452,53 @@ export function LogsHeaderView({
 					onPeriodChange(periodValue, from, to);
 				}}
 			/>
-			<Tooltip>
-				<TooltipTrigger asChild>
-					<Button
-						data-testid="logs-export-btn"
-						variant="outline"
-						size="sm"
-						className="h-7.5"
-						onClick={() => setExportDialogOpen(true)}
-						aria-label="Export CSV"
-					>
-						<Download className="h-4 w-4" />
-						<span className="hidden @5xl/logs-header:inline">Export CSV</span>
-					</Button>
-				</TooltipTrigger>
-				<TooltipContent sideOffset={6}>Export CSV</TooltipContent>
-			</Tooltip>
-
-			<Popover open={openMoreActionsPopover} onOpenChange={setOpenMoreActionsPopover}>
-				<PopoverTrigger asChild>
-					<Button variant="outline" size="sm" className="h-7.5 w-7.5" aria-label="More actions">
+			<DropdownMenu>
+				<DropdownMenuTrigger asChild>
+					<Button variant="outline" size="sm" className="h-7.5 w-7.5" aria-label={t("logs.moreActions")} data-testid="logs-more-actions-btn">
 						<MoreVertical className="h-4 w-4" aria-hidden="true" />
 					</Button>
-				</PopoverTrigger>
-				<PopoverContent className="bg-accent w-[250px] p-2" align="end">
-					<Command>
-						<CommandList>
-							<CommandItem
-								className="hover:bg-accent/50 cursor-pointer"
-								onSelect={() => {
-									setOpenMoreActionsPopover(false);
-									setExportDialogOpen(true);
-								}}
-							>
-								<Download className="text-muted-foreground size-4" />
-								<div className="flex flex-col">
-									<span className="text-sm">Export CSV</span>
-									<span className="text-muted-foreground text-xs">Download matching logs as CSV</span>
-								</div>
-							</CommandItem>
-							{/* While a job runs this doubles as the cancel control, so the run can
-							    still be stopped if the progress toast was dismissed. */}
-							<CommandItem
-								className="hover:bg-accent/50 cursor-pointer"
-								disabled={recalcCancelRequested}
-								onSelect={() => {
-									if (recalcCancelRequested) return;
-									setOpenMoreActionsPopover(false);
-									if (isRecalcRunning) {
-										void handleCancelRecalculate();
-										return;
-									}
-									setRecalcDialogOpen(true);
-								}}
-							>
-								{isRecalcRunning ? (
-									<RefreshCw className="text-muted-foreground size-4 animate-spin" />
-								) : (
-									<Calculator className="text-muted-foreground size-4" />
-								)}
-								<div className="flex flex-col">
-									<span className="text-sm">
-										{recalcCancelRequested
-											? t("logs.recalc.cancelling")
-											: isRecalcRunning
-												? t("logs.recalc.cancelRecalculation")
-												: t("logs.recalc.recalculateCosts")}
-									</span>
-									<span className="text-muted-foreground text-xs">
-										{recalcCancelRequested
-											? t("logs.recalc.hintCancelling")
-											: isRecalcRunning
-												? t("logs.recalc.hintRunning")
-												: t("logs.recalc.hintIdle")}
-									</span>
-								</div>
-							</CommandItem>
-						</CommandList>
-					</Command>
-				</PopoverContent>
-			</Popover>
+				</DropdownMenuTrigger>
+				<DropdownMenuContent align="end" className="w-64">
+					<DropdownMenuItem className="cursor-pointer items-start" onSelect={() => setExportDialogOpen(true)} data-testid="logs-export-btn">
+						<Download className="mt-0.5" />
+						<div className="flex flex-col">
+							<span>{t("logs.exportCsv")}</span>
+							<span className="text-muted-foreground text-xs">{t("logs.exportCsvDesc")}</span>
+						</div>
+					</DropdownMenuItem>
+					{/* While a job runs this doubles as the cancel control, so the run can
+					    still be stopped if the progress toast was dismissed. */}
+					<DropdownMenuItem
+						className="cursor-pointer items-start"
+						disabled={recalcCancelRequested}
+						onSelect={() => {
+							if (isRecalcRunning) {
+								void handleCancelRecalculate();
+								return;
+							}
+							setRecalcDialogOpen(true);
+						}}
+					>
+						{isRecalcRunning ? <RefreshCw className="mt-0.5 animate-spin" /> : <Calculator className="mt-0.5" />}
+						<div className="flex flex-col">
+							<span>
+								{recalcCancelRequested
+									? t("logs.recalc.cancelling")
+									: isRecalcRunning
+										? t("logs.recalc.cancelRecalculation")
+										: t("logs.recalc.recalculateCosts")}
+							</span>
+							<span className="text-muted-foreground text-xs">
+								{recalcCancelRequested
+									? t("logs.recalc.hintCancelling")
+									: isRecalcRunning
+										? t("logs.recalc.hintRunning")
+										: t("logs.recalc.hintIdle")}
+							</span>
+						</div>
+					</DropdownMenuItem>
+				</DropdownMenuContent>
+			</DropdownMenu>
 			<ColumnConfigDropdown
 				entries={columnEntries}
 				labels={columnLabels}

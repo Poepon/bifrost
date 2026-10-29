@@ -136,11 +136,32 @@ function ConsentView({ flowId }: { flowId: string }) {
 					<ShieldCheck className="text-primary size-7" />
 				</div>
 				<h1 className="text-xl font-semibold tracking-tight">{t("consent.wantsToConnect", { name: clientName })}</h1>
+				{flow.client_host && (
+					<p className="text-muted-foreground mt-1 text-sm" data-testid="oauth-consent-client-host">
+						<Trans
+							t={t}
+							i18nKey="consent.publishedBy"
+							values={{ host: flow.client_host }}
+							components={{ code0: <span className="text-foreground font-mono" /> }}
+						/>
+					</p>
+				)}
 				<p className="text-muted-foreground mt-1.5 text-sm">{t("consent.chooseIdentity")}</p>
 				<p className="mt-4 text-sm">{t("consent.recognizeApplication")}</p>
-				<p className="mt-2 font-mono text-sm break-all" data-testid="oauth-consent-redirect-uri">
+				<p className="mt-2 text-sm font-semibold break-all" data-testid="oauth-consent-redirect-host">
+					{flow.redirect_host}
+				</p>
+				<p className="text-muted-foreground mt-1 font-mono text-xs break-all" data-testid="oauth-consent-redirect-uri">
 					{flow.redirect_uri}
 				</p>
+				{flow.localhost_only_redirect && (
+					<p
+						className="mt-3 rounded-sm border border-amber-500/40 bg-amber-500/10 p-2 text-xs text-amber-700 dark:text-amber-400"
+						data-testid="oauth-consent-localhost-warning"
+					>
+						{t("consent.localhostWarning")}
+					</p>
+				)}
 			</div>
 
 			<div className="space-y-3">
@@ -322,6 +343,7 @@ function Shell({ children }: { children: React.ReactNode }) {
 // Bounces a signed-out visitor through /login and back via ?goto= (SSO stashes
 // it across the IdP hop). The card covers a blocked redirect.
 function RedirectToSignIn({ loginHref }: { loginHref: string }) {
+	const { t } = useTranslation("login");
 	useEffect(() => {
 		// replace(), so Back from /login doesn't re-enter the redirect.
 		window.location.replace(loginHref);
@@ -330,14 +352,14 @@ function RedirectToSignIn({ loginHref }: { loginHref: string }) {
 	return (
 		<Shell>
 			<div className="text-center">
-				<h1 className="text-xl font-semibold tracking-tight">Sign in to continue</h1>
+				<h1 className="text-xl font-semibold tracking-tight">{t("consent.signInToContinue")}</h1>
 				<p className="text-muted-foreground mt-2 text-sm">
-					This authorization needs a signed-in Bifrost account. Taking you to sign in — you'll come straight back here.
+					{t("consent.signInRequiredBody")}
 				</p>
 				<Button asChild className="mt-6 w-full">
 					<a href={loginHref} data-testid="oauth-consent-signin-required-link">
 						<LogIn className="mr-2 size-4" />
-						Sign in to Bifrost
+						{t("consent.signInToBifrost")}
 					</a>
 				</Button>
 			</div>
