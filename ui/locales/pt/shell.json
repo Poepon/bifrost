@@ -9,6 +9,8 @@
 		"llmLogs": "Registos LLM",
 		"mcpLogs": "Registos MCP",
 		"connectors": "Conectores",
+		"relayLogs": "Registos de relay",
+		"relays": "Relays",
 		"logsSettings": "Definições de registos",
 		"models": "Modelos",
 		"modelCatalog": "Catálogo de modelos",
@@ -83,6 +85,8 @@
 		"skillsSettings": "Definições de competências"
 	},
 	"navDesc": {
+		"relayLogs": "Chamadas de relay e o respetivo custo",
+		"relays": "Encaminhe APIs não LLM com preços por rota",
 		"home": "A sua utilização, chaves, orçamentos e acesso",
 		"observability": "Registos de pedidos e monitorização",
 		"dashboard": "Painel",
@@ -175,15 +179,67 @@
 		"empty": "Nenhum resultado para “{{query}}”",
 		"groups": {
 			"general": "Geral",
-			"pages": "Páginas"
+			"results": "Resultados",
+			"actions": "Ações",
+			"thisPage": "Nesta página"
 		},
 		"current": "Atual",
 		"footer": {
 			"navigate": "Navegar",
 			"open": "Abrir",
-			"newTab": "Nova aba"
+			"newTab": "Nova aba",
+			"back": "Voltar"
 		},
-		"openHint": "Abrir menu de comandos"
+		"openHint": "Abrir menu de comandos",
+		"actions": {
+			"create": "Criar…",
+			"copyLink": "Copiar link desta página",
+			"changeTheme": "Alterar tema…",
+			"changeLanguage": "Alterar idioma…"
+		},
+		"pages": {
+			"create": {
+				"title": "Criar",
+				"placeholder": "Pesquisar o que criar…"
+			},
+			"theme": {
+				"title": "Tema",
+				"placeholder": "Pesquisar temas…"
+			},
+			"language": {
+				"title": "Idioma",
+				"placeholder": "Pesquisar idiomas…"
+			}
+		},
+		"create": {
+			"virtualKey": "Criar chave virtual",
+			"team": "Criar equipe",
+			"customer": "Criar cliente",
+			"user": "Criar usuário",
+			"routingRule": "Criar regra de roteamento",
+			"mcpServer": "Adicionar servidor MCP",
+			"modelLimit": "Criar limite de modelo",
+			"webhook": "Criar webhook",
+			"mcpLibraryServer": "Adicionar servidor à biblioteca MCP",
+			"virtualMcp": "Criar MCP virtual",
+			"agent": "Criar agente",
+			"relay": "Adicionar endpoint de relay",
+			"plugin": "Adicionar plugin",
+			"alertChannel": "Adicionar canal de alerta",
+			"alertRule": "Criar regra de alerta",
+			"businessUnit": "Criar unidade de negócio",
+			"role": "Criar função",
+			"accessProfile": "Criar perfil de acesso",
+			"project": "Criar projeto",
+			"prompt": "Criar prompt",
+			"promptFolder": "Criar pasta de prompts",
+			"skill": "Criar skill",
+			"apiKey": "Criar chave de API"
+		},
+		"toast": {
+			"linkCopied": "Link copiado",
+			"linkCopyFailed": "Não foi possível copiar o link"
+		}
 	},
 	"search": {
 		"placeholder": "Pesquisar...",
@@ -228,6 +284,8 @@
 		"accountMenu": "Menu da conta",
 		"openMenu": "Abrir menu",
 		"signOut": "Terminar sessão",
+		"viewAsUser": "Ver como utilizador",
+		"closeView": "Fechar vista",
 		"version": "Versão",
 		"userFallback": "Utilizador",
 		"discord": "Servidor Discord",

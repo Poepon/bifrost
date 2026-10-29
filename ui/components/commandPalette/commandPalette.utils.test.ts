@@ -2,7 +2,15 @@ import { describe, expect, it } from "vitest";
 
 import type { NavItem } from "@/components/navigation/navItem";
 
-import { findCurrentCommandId, flattenNavItems, isInsideCodeEditor, scoreCommand, searchCommands } from "./commandPalette.utils";
+import {
+	findCurrentCommandId,
+	flattenNavItems,
+	flattenPaletteActions,
+	isInsideCodeEditor,
+	type PaletteAction,
+	scoreCommand,
+	searchCommands,
+} from "./commandPalette.utils";
 
 const Icon = () => null;
 const nav = (title: string, url: string, extra: Partial<NavItem> = {}): NavItem => ({
@@ -102,6 +110,39 @@ describe("searchCommands", () => {
 
 	it("scores every command when the query is empty", () => {
 		expect(scoreCommand(commands[0], "")).toBeGreaterThan(0);
+	});
+});
+
+describe("flattenPaletteActions", () => {
+	const theme: PaletteAction = {
+		id: "page:theme",
+		title: "Change theme…",
+		keywords: [],
+		page: {
+			id: "theme",
+			title: "Theme",
+			placeholder: "",
+			actions: [
+				{ id: "theme:light", title: "Light", keywords: [] },
+				{ id: "theme:dark", title: "Dark", keywords: [] },
+			],
+		},
+	};
+	const flat = flattenPaletteActions([theme, { id: "x", title: "Other", keywords: [] }]);
+
+	it("lists a nested page's actions after the action that opens it, with the page title as breadcrumb", () => {
+		expect(flat.map((a) => [a.id, a.section ?? null])).toEqual([
+			["page:theme", null],
+			["theme:light", "Theme"],
+			["theme:dark", "Theme"],
+			["x", null],
+		]);
+	});
+
+	it("lets a nested action outrank a page that matches only by letters", () => {
+		const pages = [...flattenNavItems([nav("Dashboard Alerts Rules Keys", "/darks")], true)];
+		const results = searchCommands<(typeof pages)[number] | PaletteAction>([...pages, ...flat], "dark");
+		expect(results[0].title).toBe("Dark");
 	});
 });
 

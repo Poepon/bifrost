@@ -10,6 +10,37 @@ export interface PaletteNavCommand {
 	keywords: string[];
 }
 
+// Something the palette does in place rather than a page it opens: run a callback, or open a nested list.
+export interface PaletteAction {
+	id: string;
+	title: string;
+	section?: string;
+	icon?: NavItem["icon"];
+	keywords: string[];
+	checked?: boolean;
+	run?: () => void;
+	page?: PalettePage;
+}
+
+export interface PalettePage {
+	id: string;
+	title: string;
+	placeholder: string;
+	actions: PaletteAction[];
+}
+
+type Searchable = Pick<PaletteNavCommand, "title" | "section" | "keywords">;
+
+/**
+ * Root-level search covers what nested pages hold too, so "dark" finds the theme
+ * without opening the theme page first. Nested actions take the page title as breadcrumb.
+ */
+export function flattenPaletteActions(actions: PaletteAction[]): PaletteAction[] {
+	return actions.flatMap((action) =>
+		action.page ? [action, ...action.page.actions.map((a) => ({ ...a, section: a.section ?? action.page!.title }))] : [action],
+	);
+}
+
 /**
  * Flattens the sidebar tree into one jump target per page the user can open.
  * Parents with children are toggles in the sidebar, not pages, so only their
@@ -68,7 +99,7 @@ const initials = (s: string) =>
  * breadcrumb matches, so "settings" lists the pages named Settings before
  * every page that merely lives under the Settings section.
  */
-export function scoreCommand(command: Pick<PaletteNavCommand, "title" | "section" | "keywords">, rawQuery: string): number {
+export function scoreCommand(command: Searchable, rawQuery: string): number {
 	const query = normalize(rawQuery);
 	if (!query) return 1;
 	const title = normalize(command.title);
@@ -90,7 +121,7 @@ export function scoreCommand(command: Pick<PaletteNavCommand, "title" | "section
 	return 0;
 }
 
-export function searchCommands(commands: PaletteNavCommand[], query: string): PaletteNavCommand[] {
+export function searchCommands<T extends Searchable>(commands: T[], query: string): T[] {
 	return commands
 		.map((command, index) => ({ command, index, score: scoreCommand(command, query) }))
 		.filter((r) => r.score > 0)
