@@ -37,6 +37,7 @@
 		"dumpErrorsHelp": "If enabled, full error details are written to the server console logs. Useful for debugging, but may be noisy in production.",
 		"asyncJobTtl": "Async Job Result TTL (seconds)",
 		"asyncJobTtlHelp": "Default time-to-live for async job results in seconds. Results are automatically cleaned up after expiry.",
+		"languageHelp": "Display language for the dashboard. Saved in this browser and applied right away.",
 		"headerForwarding": "Header Forwarding",
 		"headerForwardingHelp": "Control which extra headers are forwarded to LLM providers.",
 		"aboutHeaderForwarding": "About header forwarding",
