@@ -182,11 +182,20 @@ func panicSummary(r any) string {
 // base-path middleware is added outermost only when server.base_path is
 // configured, so the default chain is unchanged.
 func ServerRootHandler(cors *CorsMiddleware, config *lib.Config, router fasthttp.RequestHandler) fasthttp.RequestHandler {
-	handler := SecurityHeadersMiddleware()(cors.Middleware()(RecoveryMiddleware(cors)(RequestDecompressionMiddleware(config)(router))))
-	if config != nil && config.ServerConfig != nil && config.ServerConfig.BasePath != "" {
-		handler = basePathMiddleware(config.ServerConfig.BasePath)(handler)
+	return BasePathRootHandler(config, SecurityHeadersMiddleware()(cors.Middleware()(RecoveryMiddleware(cors)(RequestDecompressionMiddleware(config)(router)))))
+}
+
+// BasePathRootHandler wraps a server's root handler with the base-path strip
+// when server.base_path is configured, and returns next unchanged otherwise.
+// ServerRootHandler applies it; a build that assembles its own root chain
+// instead of calling ServerRootHandler wraps that chain with it, once and
+// outermost. Wrapping a chain that already went through ServerRootHandler
+// would strip the prefix twice.
+func BasePathRootHandler(config *lib.Config, next fasthttp.RequestHandler) fasthttp.RequestHandler {
+	if config == nil || config.ServerConfig == nil || config.ServerConfig.BasePath == "" {
+		return next
 	}
-	return handler
+	return basePathMiddleware(config.ServerConfig.BasePath)(next)
 }
 
 // basePathMiddleware strips basePath (normalized, e.g. "/bifrost") from the
