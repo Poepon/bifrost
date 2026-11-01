@@ -5694,6 +5694,34 @@ func TestServerRootHandler_NoBasePathNotWired(t *testing.T) {
 	}
 }
 
+// TestBasePathRootHandler pins the exported root wrapper that builds with their
+// own root chain (enterprise) use in place of ServerRootHandler: it strips the
+// configured prefix once, and without a base path it returns next unchanged.
+func TestBasePathRootHandler(t *testing.T) {
+	var gotPath string
+	next := func(ctx *fasthttp.RequestCtx) { gotPath = string(ctx.Request.URI().PathOriginal()) }
+
+	handler := BasePathRootHandler(basePathTestConfig("/bifrost"), next)
+	for uri, want := range map[string]string{
+		"/bifrost/api/logs":         "/api/logs",
+		"/api/logs":                 "/api/logs",
+		"/bifrost":                  "/",
+		"/bifrostx/api/logs":        "/bifrostx/api/logs",
+		"/bifrost/bifrost/api/logs": "/bifrost/api/logs",
+	} {
+		gotPath = ""
+		ctx := &fasthttp.RequestCtx{}
+		ctx.Request.SetRequestURI(uri)
+		handler(ctx)
+		assert.Equal(t, want, gotPath, uri)
+	}
+
+	for _, config := range []*lib.Config{nil, {}, basePathTestConfig("")} {
+		handler := BasePathRootHandler(config, next)
+		assert.Equal(t, reflect.ValueOf(next).Pointer(), reflect.ValueOf(handler).Pointer(), "no base path: next is returned as is")
+	}
+}
+
 // BenchmarkBasePathMiddleware measures the per-request cost of the prefix strip
 // when a base path is configured (it is not in the chain otherwise).
 func BenchmarkBasePathMiddleware(b *testing.B) {
