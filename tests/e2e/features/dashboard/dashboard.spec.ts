@@ -385,8 +385,7 @@ test.describe('Dashboard', () => {
 
       const actualTrigger = dashboardPage.page.getByTestId('dashboard-team-rankings-top-chart-total-trigger')
       const actualTooltip = dashboardPage.page.getByTestId('dashboard-team-rankings-top-chart-total-tooltip')
-      await expect(actualTrigger).toContainText('Total Requests')
-      await expect(actualTrigger).toContainText('1')
+      await expect(actualTrigger).toMatchAriaSnapshot('- text: Total Requests 1')
       await actualTrigger.hover()
       await expect(actualTooltip).toBeVisible()
       await expect(actualTooltip).toContainText('Actual number of requests sent.')
@@ -396,8 +395,7 @@ test.describe('Dashboard', () => {
 
       const attributedTrigger = dashboardPage.page.getByTestId('dashboard-team-rankings-top-chart-secondary-total-trigger')
       const attributedTooltip = dashboardPage.page.getByTestId('dashboard-team-rankings-top-chart-secondary-total-tooltip')
-      await expect(attributedTrigger).toContainText('Attributed Requests')
-      await expect(attributedTrigger).toContainText('2')
+      await expect(attributedTrigger).toMatchAriaSnapshot('- text: Attributed Requests 2')
       await attributedTrigger.hover()
       await expect(attributedTooltip).toBeVisible()
       await expect(attributedTooltip).toContainText(
